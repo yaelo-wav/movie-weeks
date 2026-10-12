@@ -1,0 +1,4 @@
+# Holds your TMDB key: never commit it. On GitHub the key lives in the TMDB_API_KEY secret.
+config.json
+.claude/
+node_modules/
