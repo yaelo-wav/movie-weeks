@@ -70,6 +70,7 @@ button { font: inherit; color: inherit; }
 .field { display: grid; gap: 5px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .field input, .joinrow input { font: 500 16px/1.2 var(--font-body); color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; text-transform: none; letter-spacing: 0; width: 100%; }
 .field input:focus, .joinrow input:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.field .opt { font-weight: 500; letter-spacing: 0; text-transform: none; }
 .field small { font-weight: 500; letter-spacing: 0; text-transform: none; }
 .form-error { color: #ff8a80; font-size: 13px; min-height: 1em; }
 .form-error:empty { display: none; }
@@ -79,6 +80,24 @@ button { font: inherit; color: inherit; }
 .acct-sec h4 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
 .codebox { display: flex; gap: 8px; align-items: center; }
 .codebox code { flex: 1; font: 800 24px/1 var(--font-display); letter-spacing: .14em; background: var(--raised); border: 1px dashed var(--blue); border-radius: 10px; padding: 10px 12px; text-align: center; color: var(--blue-text); user-select: all; }
+.acct { position: relative; }
+.acct .dot { position: absolute; top: -1px; right: -1px; width: 11px; height: 11px; border-radius: 50%; background: #ff5a5f; border: 2px solid var(--bg); }
+.handle { color: var(--muted); font-weight: 500; font-size: 13px; margin-left: 6px; }
+.flist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.frow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.frow:last-child { border-bottom: 0; }
+.frow > div:first-child { min-width: 0; }
+.frow b { font-weight: 600; }
+.frow .sub { display: block; font-size: 12px; color: var(--muted); }
+.factions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.factions .btn { padding: 7px 12px; font-size: 13px; }
+.btn.danger { border-color: #ff5a5f; color: #ff8a80; }
+.searchbox input { width: 100%; font: 500 16px/1.2 var(--font-body); color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; }
+.searchbox input:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.wlfilter { overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.wlfilter::-webkit-scrollbar { display: none; }
+.wlfilter button { white-space: nowrap; flex: 0 0 auto; }
+.empty .factions { justify-content: center; }
 .joinrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .brand span { color: var(--blue-text); }
 .tabs { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }

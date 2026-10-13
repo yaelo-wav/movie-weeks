@@ -15,8 +15,11 @@ const ICON = {
 const state = {
   view: viewFromHash(),
   account: null,      // your account ({ uid, name, group, lbUser }) when signed in
-  members: [],        // others in your sharing group: [{ uid, name, watchlist: Set of fv }]
-  wlFilter: 'all',    // watchlist filter with a group: all | together | solo
+  members: [],        // your friends: [{ uid, name, username, watchlist: Set of fv }]
+  requests: { incoming: [], outgoing: [] }, // friend requests
+  requestsLoaded: false,
+  authKnown: false,   // true once we know whether someone is logged in
+  wlFilter: 'all',    // watchlist filter with friends: all | solo | a friend's uid
   lbData: null,       // last loaded data/letterboxd.json
   selected: mondayOf(new Date()),
   shown: PAGE,
@@ -55,7 +58,8 @@ function weekTitle(monday) {
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isRerelease = f => f.year && Number(f.nl.slice(0, 4)) - f.year >= 2;
-const onList = fv => state.watchlist.some(i => i.fv === fv);
+const onList = fv => hasList() && state.watchlist.some(i => i.fv === fv);
+const isWatched = fv => hasList() && state.watched.has(fv);
 const filmFor = fv => state.films?.get(fv) || state.watchlist.find(i => i.fv === fv)?.film;
 
 // ---------- watchlist storage (this device only) ----------
@@ -71,6 +75,7 @@ function saveWatched() {
   pushAccount();
 }
 function toggleSave(fv) {
+  if (!state.account) return openAccount('Create an account (or log in) to keep a watchlist.');
   if (onList(fv)) {
     state.watchlist = state.watchlist.filter(i => i.fv !== fv);
     // Removed in the app while it's on your Letterboxd watchlist: don't add it back on the next sync.
@@ -85,7 +90,7 @@ function toggleSave(fv) {
 }
 function updateSaveButton(b) {
   const fv = +b.dataset.save, saved = onList(fv), title = filmFor(fv)?.title || '';
-  b.hidden = state.watched.has(fv); // no point saving a film you've already seen
+  b.hidden = isWatched(fv); // no point saving a film you've already seen
   b.setAttribute('aria-pressed', saved);
   if (b.classList.contains('add')) b.innerHTML = `${saved ? ICON.check : ICON.add}<span>${saved ? 'On your watchlist' : 'Add to watchlist'}</span>`;
   else { b.innerHTML = saved ? ICON.check : ICON.add; b.setAttribute('aria-label', `${saved ? 'Remove from' : 'Add to'} watchlist: ${title}`); }
@@ -97,6 +102,7 @@ function loadWatched() {
 }
 // Marking a film as watched also takes it off the watchlist.
 function toggleWatched(fv) {
+  if (!state.account) return openAccount('Create an account (or log in) to mark films as watched.');
   if (state.watched.has(fv)) {
     state.watched.delete(fv);
     // Un-marked in the app: don't let the Letterboxd diary mark it again.
@@ -125,16 +131,8 @@ function saveLbSync() { try { localStorage.setItem(LB_SYNC_KEY, JSON.stringify(l
 
 function applyLetterboxd(lb) {
   state.lbData = lb;
-  // With an account, only sync when the account is linked to this Letterboxd profile.
-  if (state.account && (state.account.lbUser || '').toLowerCase() !== lb.user) { state.letterboxd = null; return; }
-  // Signed out: only on a device that already synced this profile before accounts existed (not on someone
-  // else's phone that just installed the app).
-  if (!state.account) {
-    let device = null;
-    try { device = localStorage.getItem('opening-weeks:letterboxd-device'); } catch {}
-    if (!device && lbSync.imported.length) { device = lb.user; try { localStorage.setItem('opening-weeks:letterboxd-device', device); } catch {} }
-    if (device !== lb.user) { state.letterboxd = null; return; }
-  }
+  // Only for a signed-in account that's linked to this Letterboxd profile.
+  if (!state.account || (state.account.lbUser || '').toLowerCase() !== lb.user) { state.letterboxd = null; return; }
   const byTmdb = new Map([...state.films.values()].filter(f => f.tmdb).map(f => [f.tmdb, f]));
   const onLbList = new Set(lb.watchlist);
   for (const id of lb.watched) {
@@ -163,12 +161,13 @@ function applyLetterboxd(lb) {
   updateCount();
 }
 
-// ---------- account & sharing ----------
+// ---------- account & friends ----------
 // With an account (Firebase, see cloud.js) your watchlist, watched films and Letterboxd sync state live in the
-// account and follow you across devices; this device keeps a copy for offline use. People in your sharing group
-// can see each other's watchlists: a film on both is "together".
+// account and follow you across devices; this device keeps a copy for offline use. Friends (found by username,
+// added once they accept your request) can see each other's watchlists; a film on yours and a friend's is
+// "together" with that friend.
 const MERGED_KEY = 'opening-weeks:account-merged'; // uid this device's own copy has been merged into
-let pushTimer = null, unsubMe = null, unsubGroup = null, watchingGroup = null, lbAppliedFor = null;
+let pushTimer = null, unsubMe = null, unsubFriends = null, unsubRequests = null, friendKey = '', lbAppliedFor = null, groupMigrated = false;
 const slim = f => f && ({ fv: f.fv, tmdb: f.tmdb || null, title: f.title, poster: f.poster || null, nl: f.nl, us: f.us || null, year: f.year || null, fvSlug: f.fvSlug || '', popularity: f.popularity ?? null });
 
 function pushAccount() {
@@ -200,7 +199,7 @@ function applyAccountDoc(doc, uid) {
     if (!lbUser && lbSync.imported.length && state.lbData) lbUser = state.lbData.user; // this device synced Letterboxd
     try { localStorage.setItem(MERGED_KEY, uid); } catch {}
   }
-  state.account = { uid, name: doc.name || '', group: doc.group || null, lbUser };
+  state.account = { uid, name: doc.name || '', username: doc.username || '', lbUser, friends: doc.friends || [] };
   state.watched = watched;
   state.watchlist = wl.filter(i => !watched.has(i.fv));
   Object.assign(lbSync, lbs);
@@ -210,35 +209,57 @@ function applyAccountDoc(doc, uid) {
     localStorage.setItem(LB_SYNC_KEY, JSON.stringify(lbSync));
   } catch {}
   if (first) { if (lbUser !== (doc.lbUser || '')) cloud.call('saveMe', { lbUser }).catch(() => {}); pushAccount(); }
-  if (state.lbData && lbAppliedFor !== uid) { lbAppliedFor = uid; applyLetterboxd(state.lbData); }
-  followGroup(state.account.group);
+  // Sync Letterboxd once per account + linked profile (again when the profile changes).
+  const lbKey = `${uid}:${lbUser}`;
+  if (state.lbData && lbAppliedFor !== lbKey) { lbAppliedFor = lbKey; applyLetterboxd(state.lbData); }
+  if (doc.group && !groupMigrated) { groupMigrated = true; migrateGroup(doc.group); }
+  followFriends(state.account.friends);
   updateCount();
+  updateAccountButton();
   render();
   renderAccountSheet();
 }
 
-function followGroup(code) {
-  if (code === watchingGroup) return;
-  unsubGroup?.(); unsubGroup = null; watchingGroup = code; state.members = [];
-  if (!code) return;
-  unsubGroup = cloud.call('watchGroup', code, members => {
-    state.members = members.map(m => ({ uid: m.uid, name: m.name || 'Friend', watchlist: new Set((m.watchlist || []).map(i => i.fv)) }));
+// Earlier versions shared through an invite-code group: its members become friends (both sides do this).
+async function migrateGroup(code) {
+  const ids = await cloud.call('groupMembers', code).catch(() => []);
+  const friends = [...new Set([...state.account.friends, ...ids])];
+  await cloud.call('saveMe', { friends, group: null }).catch(() => {});
+}
+
+function followFriends(uids, force = false) {
+  const k = [...uids].sort().join(',');
+  if (k === friendKey && !force) return;
+  friendKey = k;
+  unsubFriends?.(); unsubFriends = null;
+  if (!uids.length) { state.members = []; return; }
+  unsubFriends = cloud.call('watchFriends', uids, docs => {
+    state.members = docs.map(m => ({ uid: m.uid, name: m.name || 'Friend', username: m.username || '', watchlist: new Set((m.watchlist || []).map(i => i.fv)) }));
     render();
     renderAccountSheet();
+  }, gone => {
+    // Can't read their list: they removed you, or they're still finishing your request on their side.
+    if (!state.requestsLoaded) return;
+    const busy = [...state.requests.incoming, ...state.requests.outgoing].some(r => r.from === gone || r.to === gone);
+    if (!busy) cloud.call('removeFriend', gone).catch(() => {});
   });
 }
 
-// Names of the people in your group who have this film on their watchlist.
+// Names of your friends who have this film on their watchlist.
 const fansOf = fv => (state.members || []).filter(m => m.watchlist.has(fv)).map(m => m.name);
 
 function startAccounts() {
-  if (!window.cloud) return;
+  const unknown = () => { state.authKnown = true; updateCount(); render(); };
+  if (!window.cloud) return unknown();
   cloud.ready.then(ok => {
-    if (!ok) return;
+    if (!ok) return unknown();
     $('acctBtn').hidden = false;
     cloud.onAuth(user => {
-      unsubMe?.(); unsubMe = null; lbAppliedFor = null;
-      followGroup(null);
+      state.authKnown = true;
+      unsubMe?.(); unsubRequests?.(); unsubFriends?.();
+      unsubMe = unsubRequests = unsubFriends = null;
+      friendKey = ''; lbAppliedFor = null; groupMigrated = false;
+      state.members = []; state.requests = { incoming: [], outgoing: [] }; state.requestsLoaded = false; searchResults = []; confirmRemove = null;
       if (!user) {
         // Logged out: the films live in the account, so clear this device's copy (so the next person who logs
         // in here doesn't get them merged into their account).
@@ -249,31 +270,40 @@ function startAccounts() {
           updateCount();
         }
         state.account = null;
-        state.members = [];
         if (state.lbData) applyLetterboxd(state.lbData);
         updateAccountButton(); render(); renderAccountSheet();
         return;
       }
-      unsubMe = cloud.call('watchMe', doc => { applyAccountDoc(doc, user.uid); updateAccountButton(); });
+      unsubRequests = cloud.call('watchRequests', ({ incoming, outgoing }) => {
+        state.requests = { incoming, outgoing };
+        state.requestsLoaded = true;
+        // Requests you sent that were accepted: add them to your friends and clear the request.
+        outgoing.filter(r => r.status === 'accepted').forEach(r => cloud.call('finishRequest', r).catch(() => {}));
+        if (state.account) followFriends(state.account.friends, true);
+        updateAccountButton();
+        renderAccountSheet();
+      });
+      unsubMe = cloud.call('watchMe', doc => applyAccountDoc(doc, user.uid));
     });
   });
 }
 function updateAccountButton() {
   const b = $('acctBtn');
   const name = state.account?.name;
-  b.innerHTML = name ? esc(name.trim()[0].toUpperCase()) : ICON.user;
-  b.setAttribute('aria-label', state.account ? `Account: ${name || 'signed in'}` : 'Log in or create an account');
+  const waiting = (state.requests?.incoming || []).filter(r => r.status === 'pending').length;
+  b.innerHTML = (name ? esc(name.trim()[0].toUpperCase()) : ICON.user) + (waiting ? '<i class="dot"></i>' : '');
+  b.setAttribute('aria-label', state.account ? `Account: ${name || 'signed in'}${waiting ? `, ${waiting} friend request${waiting > 1 ? 's' : ''}` : ''}` : 'Log in or create an account');
   b.classList.toggle('in', !!state.account);
 }
 
 function updateWatchedButton(b) {
-  const seen = state.watched.has(+b.dataset.watched);
+  const seen = isWatched(+b.dataset.watched);
   b.setAttribute('aria-pressed', seen);
   b.innerHTML = `${ICON.eye}<span>${seen ? 'Watched' : 'Mark as watched'}</span>`;
 }
 
 function updateCount() {
-  const n = state.watchlist.length;
+  const n = hasList() ? state.watchlist.length : 0;
   $('wlCount').hidden = !n;
   $('wlCount').textContent = n;
 }
@@ -291,7 +321,7 @@ function datesLine(f) {
 }
 const lbBadge = f => f.lb?.rating ? `<span class="lbscore" aria-label="Letterboxd ${f.lb.rating.toFixed(1)} out of 5"><i></i><i></i><i></i>${f.lb.rating.toFixed(1)}</span>` : '';
 function card(f, rank) {
-  const seen = state.watched.has(f.fv);
+  const seen = isWatched(f.fv);
   return `<article class="card">
     <button class="save" type="button" data-save="${f.fv}"></button>
     <button class="open" type="button" data-open="${f.fv}" aria-label="${esc(f.title)}: details${seen ? ' (watched)' : ''}">
@@ -326,7 +356,26 @@ function renderReleases() {
 }
 
 // ---------- watchlist view ----------
+// Watchlist, watched and double screenings need an account. While the login state is still loading, a device
+// that was signed in before keeps showing its saved copy.
+function hasList() {
+  if (state.account) return true;
+  if (state.authKnown) return false;
+  try { return !!localStorage.getItem(MERGED_KEY); } catch { return false; }
+}
+function loginPrompt(what) {
+  $('main').innerHTML = `<div class="empty"><p>Log in or create an account to ${what}.</p>
+    <div class="factions"><button class="btn primary" type="button" data-login="signup">Create account</button><button class="btn" type="button" data-login="login">Log in</button></div></div>`;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-login]');
+  if (!b) return;
+  authMode = b.dataset.login;
+  openAccount();
+});
+
 function renderWatchlist() {
+  if (!hasList()) return loginPrompt('keep a watchlist and see which films you want to see with friends');
   if (!state.watchlist.length) {
     $('main').innerHTML = `<div class="empty"><p>Nothing here yet. Tap the <b>+</b> on any poster to save it, and it shows up here under the week it opens.</p><button class="btn primary" type="button" id="toReleases">Browse releases</button></div>`;
     $('toReleases').addEventListener('click', () => setView('releases'));
@@ -334,12 +383,15 @@ function renderWatchlist() {
   }
   const thisMonday = key(mondayOf(new Date()));
   const groups = new Map(), past = [];
-  // With a sharing group: All / Together (also on someone else's list) / Just me.
-  const shared = state.members?.length > 0;
-  if (!shared) state.wlFilter = 'all';
-  const keep = fv => state.wlFilter === 'together' ? fansOf(fv).length > 0 : state.wlFilter === 'solo' ? !fansOf(fv).length : true;
-  const filterBar = shared ? `<div class="seg wlfilter" role="group" aria-label="Show">${[['all', 'All'], ['together', `Together`], ['solo', 'Just me']].map(([v, t]) =>
-    `<button type="button" data-wlfilter="${v}" aria-pressed="${state.wlFilter === v}">${t}</button>`).join('')}</div>` : '';
+  // With friends: All / Just me (on nobody else's list) / with <friend> (also on that friend's list).
+  const friends = state.members || [];
+  if (state.wlFilter !== 'all' && state.wlFilter !== 'solo' && !friends.some(m => m.uid === state.wlFilter)) state.wlFilter = 'all';
+  const keep = fv => state.wlFilter === 'all' ? true
+    : state.wlFilter === 'solo' ? !fansOf(fv).length
+    : friends.find(m => m.uid === state.wlFilter)?.watchlist.has(fv);
+  const options = [['all', 'All'], ['solo', 'Just me'], ...friends.map(m => [m.uid, `With ${m.name}`])];
+  const filterBar = friends.length ? `<div class="seg wlfilter" role="group" aria-label="Show">${options.map(([v, t]) =>
+    `<button type="button" data-wlfilter="${esc(v)}" aria-pressed="${state.wlFilter === v}">${esc(t)}</button>`).join('')}</div>` : '';
   state.watchlist.forEach(i => {
     const f = filmFor(i.fv);
     if (!f || !keep(i.fv)) return;
@@ -355,12 +407,11 @@ function renderWatchlist() {
     section(weekTitle(parseDay(m)), rangeLabel(parseDay(m)), groups.get(m).sort((a, b) => a.nl.localeCompare(b.nl)), m === thisMonday));
   // Films you can already see go first: they're the ones to plan for now.
   if (past.length) parts.unshift(section('Already in cinemas', '', past.sort((a, b) => b.nl.localeCompare(a.nl))));
-  const n = state.watchlist.length;
-  const lbNote = state.letterboxd ? ` · synced with Letterboxd (${esc(state.letterboxd.user)})` : '';
-  const empty = !parts.length ? `<div class="empty"><p>${state.wlFilter === 'together'
-    ? `No films on both your list and ${esc(state.members.map(m => m.name).join(' & '))}'s yet.`
-    : 'Every film on your list is also on someone else\'s.'}</p></div>` : '';
-  $('main').innerHTML = `<div class="wl"><div class="wl-head"><h2>Watchlist</h2><p>${n} film${n === 1 ? '' : 's'} by the week they open in Dutch cinemas${lbNote}</p>${filterBar}</div>${parts.join('')}${empty}</div>`;
+  const friend = friends.find(m => m.uid === state.wlFilter);
+  const empty = !parts.length ? `<div class="empty"><p>${friend
+    ? `None of your films are on ${esc(friend.name)}'s watchlist yet.`
+    : 'Every film on your list is also on a friend\'s list.'}</p></div>` : '';
+  $('main').innerHTML = `<div class="wl"><div class="wl-head"><h2>Watchlist</h2>${filterBar}</div>${parts.join('')}${empty}</div>`;
   hydrateButtons($('main'));
 }
 
@@ -474,6 +525,7 @@ function currentCinema() {
 }
 
 function renderDoubles() {
+  if (!hasList()) return loginPrompt('find double screenings of films on your watchlist');
   const wrap = body => { $('main').innerHTML = `<div class="dbl"><div class="dbl-head"><h2>Double screenings</h2></div>${body}</div>`; };
 
   if (!state.showtimes) { wrap(state.showtimesError ? `<div class="empty"><p>Couldn't load the Pathé showtimes (${esc(state.showtimesError)}).</p></div>` : '<div class="skel" style="aspect-ratio:auto;height:160px"></div>'); return; }
@@ -718,7 +770,7 @@ async function load() {
 }
 
 // ---------- account sheet ----------
-let authMode = 'login';
+let authMode = 'login', authNote = '', searchResults = [], searchTimer = null, confirmRemove = null;
 const AUTH_ERRORS = {
   'auth/invalid-credential': 'Email or password is incorrect.',
   'auth/wrong-password': 'Email or password is incorrect.',
@@ -728,41 +780,78 @@ const AUTH_ERRORS = {
   'auth/weak-password': 'Use a password of at least 6 characters.',
   'auth/too-many-requests': 'Too many attempts. Wait a moment and try again.',
   'auth/network-request-failed': 'No connection. Check your internet and try again.',
-  'group/not-found': 'No group with that code. Check the code and try again.',
-  'group/full': 'That group is full.',
-  'permission-denied': 'That isn\'t allowed. Check the code and try again.',
+  'username/invalid': 'Usernames are 3–20 characters: lowercase letters, numbers, dots and underscores.',
+  'username/taken': 'That username is taken. Try another one.',
+  'permission-denied': 'That isn\'t allowed right now. Try again later.',
 };
 const authError = e => AUTH_ERRORS[e?.code] || 'Something went wrong. Try again.';
+const at = u => u ? `<span class="handle">@${esc(u)}</span>` : '';
+
+function friendRows() {
+  const a = state.account;
+  const loaded = new Map(state.members.map(m => [m.uid, m]));
+  const incoming = state.requests.incoming.filter(r => r.status === 'pending');
+  const outgoing = state.requests.outgoing.filter(r => r.status === 'pending');
+  const rows = [];
+  for (const r of incoming) rows.push(`<li class="frow"><div><b>${esc(r.fromName || r.fromUsername)}</b>${at(r.fromUsername)}<span class="sub">wants to be friends</span></div>
+    <div class="factions"><button class="btn primary" type="button" data-accept="${esc(r.id)}">Accept</button><button class="btn" type="button" data-decline="${esc(r.id)}">Decline</button></div></li>`);
+  for (const uid of a.friends) {
+    const m = loaded.get(uid);
+    const sure = confirmRemove === uid;
+    rows.push(`<li class="frow"><div><b>${esc(m?.name || 'Friend')}</b>${at(m?.username)}${m ? '' : '<span class="sub">connecting…</span>'}</div>
+      <div class="factions"><button class="btn${sure ? ' danger' : ''}" type="button" data-unfriend="${esc(uid)}">${sure ? 'Remove?' : 'Remove'}</button></div></li>`);
+  }
+  for (const r of outgoing) rows.push(`<li class="frow"><div><b>${esc(r.toName || r.toUsername)}</b>${at(r.toUsername)}<span class="sub">request sent</span></div>
+    <div class="factions"><button class="btn" type="button" data-cancel="${esc(r.id)}">Cancel</button></div></li>`);
+  return rows.length ? `<ul class="flist">${rows.join('')}</ul>` : '<p class="muted small">No friends yet. Search for someone\'s username below.</p>';
+}
+
+function searchRows() {
+  const a = state.account;
+  if (!searchResults.length) return '';
+  return `<ul class="flist">${searchResults.map(u => {
+    const friend = a.friends.includes(u.uid);
+    const sent = state.requests.outgoing.some(r => r.to === u.uid);
+    const asked = state.requests.incoming.find(r => r.from === u.uid && r.status === 'pending');
+    const action = friend ? '<span class="sub">Friends</span>'
+      : sent ? '<span class="sub">Request sent</span>'
+      : asked ? `<button class="btn primary" type="button" data-accept="${esc(asked.id)}">Accept</button>`
+      : `<button class="btn primary" type="button" data-add="${esc(u.uid)}" data-name="${esc(u.name || '')}" data-username="${esc(u.username)}">Add</button>`;
+    return `<li class="frow"><div><b>${esc(u.name || u.username)}</b>${at(u.username)}</div><div class="factions">${action}</div></li>`;
+  }).join('')}</ul>`;
+}
 
 function renderAccountSheet() {
   const d = $('acct');
   if (!d.open) return;
   const a = state.account;
+  // Keep the friend search field as it was across re-renders (friends' lists update live).
+  const search = $('friendSearch'), q = search?.value || '', focused = document.activeElement === search;
   let body;
   if (!a) {
     const signup = authMode === 'signup';
     body = `<h2 id="acctTitle">${signup ? 'Create account' : 'Log in'}</h2>
-      <p class="muted">${signup ? 'Keep your watchlist in an account and share it with someone, like your sister.' : 'Log in to see your watchlist on any device.'}${state.watchlist.length ? ' The films saved on this phone are added to your account.' : ''}</p>
+      <p class="muted">${authNote || (signup ? 'With an account you keep a watchlist, and you can add friends to see which films you want to see together.' : 'Log in to see your watchlist and friends.')}</p>
       <form id="authForm" class="form" novalidate>
-        ${signup ? '<label class="field">Name<input id="fName" autocomplete="given-name" required></label>' : ''}
         <label class="field">Email<input id="fEmail" type="email" autocomplete="email" required></label>
         <label class="field">Password<input id="fPass" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" required>${signup ? '<small>At least 6 characters.</small>' : ''}</label>
+        ${signup ? `<label class="field">Username<input id="fUser" autocapitalize="none" autocomplete="username" spellcheck="false" required><small>This is how friends find you. Lowercase letters, numbers, dots and underscores.</small></label>
+        <label class="field">Letterboxd username <span class="opt">(optional)</span><input id="fLb" autocapitalize="none" autocomplete="off" spellcheck="false"><small>Syncs your Letterboxd watchlist and watched films.</small></label>` : ''}
         <p class="form-error" id="fError" role="alert"></p>
         <button class="btn primary" type="submit" id="fSubmit">${signup ? 'Create account' : 'Log in'}</button>
       </form>
       <p class="switch">${signup ? 'Already have an account? <button type="button" data-authmode="login">Log in</button>'
         : 'New here? <button type="button" data-authmode="signup">Create an account</button> · <button type="button" id="forgot">Forgot password?</button>'}</p>`;
   } else {
-    const others = state.members.map(m => esc(m.name)).join(', ');
     body = `<h2 id="acctTitle">Hi ${esc(a.name || 'there')}</h2>
-      <section class="acct-sec"><h4>Sharing</h4>
-      ${a.group ? `<p>${others ? `Sharing watchlists with <b>${others}</b>.` : 'Nobody has joined yet.'} Invite someone with this code:</p>
-          <div class="codebox"><code id="gCode">${esc(a.group)}</code><button class="btn" type="button" id="copyCode">Copy</button></div>
-          <p class="muted small">They create an account in this app, tap <b>Join with a code</b> and enter it.</p>
-          <button class="btn" type="button" id="leaveGroup">Stop sharing</button>`
-        : `<p>Share watchlists with someone to see which films you'll see together.</p>
-          <button class="btn primary" type="button" id="newGroup">Create an invite code</button>
-          <form id="joinForm" class="joinrow" novalidate><input id="joinCode" placeholder="Join with a code" autocapitalize="characters" autocomplete="off" maxlength="12"><button class="btn" type="submit">Join</button></form>`}
+      ${a.username ? (a.username !== a.name ? `<p class="muted">${at(a.username)}</p>` : '') : `<form id="userForm" class="form" novalidate>
+        <p>Pick a username so friends can find you.</p>
+        <div class="joinrow"><input id="pickUser" placeholder="username" autocapitalize="none" spellcheck="false" autocomplete="off"><button class="btn primary" type="submit">Save</button></div>
+        <p class="form-error" id="uError" role="alert"></p></form>`}
+      <section class="acct-sec"><h4>Friends</h4>
+        ${friendRows()}
+        <div class="searchbox"><input id="friendSearch" type="search" placeholder="Add a friend by username" autocapitalize="none" spellcheck="false" autocomplete="off"></div>
+        <div id="searchResults">${searchRows()}</div>
         <p class="form-error" id="gError" role="alert"></p></section>
       <section class="acct-sec"><h4>Letterboxd</h4>
         <form id="lbForm" class="joinrow" novalidate><input id="lbUser" placeholder="Letterboxd username" value="${esc(a.lbUser)}" autocapitalize="none" autocomplete="off"><button class="btn" type="submit">Save</button></form>
@@ -770,31 +859,54 @@ function renderAccountSheet() {
       <button class="btn" type="button" id="signOut">Log out</button>`;
   }
   d.querySelector('.acct-body').innerHTML = body;
-  d.querySelector('#fName, #fEmail')?.focus();
+  const s = $('friendSearch');
+  if (s) { s.value = q; if (focused) s.focus(); }
+  else d.querySelector('#fEmail')?.focus();
 }
-function openAccount() {
+function openAccount(note = '') {
+  authNote = note;
+  if (note) authMode = 'signup';
   const d = $('acct');
   if (!d.open) d.showModal();
   renderAccountSheet();
 }
-$('acctBtn').addEventListener('click', openAccount);
+$('acctBtn').addEventListener('click', () => openAccount());
+$('acct').addEventListener('close', () => { authNote = ''; searchResults = []; confirmRemove = null; });
+$('acct').addEventListener('input', e => {
+  if (e.target.id !== 'friendSearch') return;
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  searchTimer = setTimeout(async () => {
+    searchResults = q.length < 2 ? [] : await cloud.call('searchUsers', q).catch(() => []);
+    $('searchResults') && ($('searchResults').innerHTML = searchRows() || (q.length >= 2 ? '<p class="muted small">Nobody with that username.</p>' : ''));
+  }, 250);
+});
 $('acct').addEventListener('click', async e => {
   const d = $('acct');
   if (e.target === d || e.target.closest('.close')) return d.close();
-  const t = e.target;
+  const t = e.target.closest('button');
+  if (!t) return;
+  const err = el => x => { if ($(el)) $(el).textContent = authError(x); };
+  const req = id => [...state.requests.incoming, ...state.requests.outgoing].find(r => r.id === id);
   if (t.dataset.authmode) { authMode = t.dataset.authmode; renderAccountSheet(); }
   else if (t.id === 'forgot') {
     const email = $('fEmail').value.trim();
     if (!email) { $('fError').textContent = 'Enter your email first, then tap "Forgot password?" again.'; return; }
     try { await cloud.call('resetPassword', email); $('fError').textContent = `If there's an account for ${email}, a reset link is on its way.`; }
-    catch (err) { $('fError').textContent = authError(err); }
+    catch (x) { $('fError').textContent = authError(x); }
   }
   else if (t.id === 'signOut') { await cloud.call('signOut'); d.close(); }
-  else if (t.id === 'newGroup') { try { await cloud.call('createGroup'); } catch (err) { $('gError').textContent = authError(err); } }
-  else if (t.id === 'leaveGroup') { try { await cloud.call('leaveGroup', state.account.group); } catch (err) { $('gError').textContent = authError(err); } }
-  else if (t.id === 'copyCode') {
-    try { await navigator.clipboard.writeText(state.account.group); t.textContent = 'Copied'; }
-    catch { getSelection().selectAllChildren($('gCode')); }
+  else if (t.dataset.add) {
+    t.disabled = true;
+    await cloud.call('sendRequest', { uid: t.dataset.add, name: t.dataset.name, username: t.dataset.username }, state.account).catch(err('gError'));
+  }
+  else if (t.dataset.accept) await cloud.call('acceptRequest', req(t.dataset.accept)).catch(err('gError'));
+  else if (t.dataset.decline) await cloud.call('declineRequest', req(t.dataset.decline)).catch(err('gError'));
+  else if (t.dataset.cancel) await cloud.call('declineRequest', req(t.dataset.cancel)).catch(err('gError'));
+  else if (t.dataset.unfriend) {
+    if (confirmRemove !== t.dataset.unfriend) { confirmRemove = t.dataset.unfriend; renderAccountSheet(); return; }
+    confirmRemove = null;
+    await cloud.call('removeFriend', t.dataset.unfriend).catch(err('gError'));
   }
 });
 $('acct').addEventListener('submit', async e => {
@@ -805,20 +917,22 @@ $('acct').addEventListener('submit', async e => {
     btn.disabled = true; $('fError').textContent = '';
     try {
       if (authMode === 'signup') {
-        const name = $('fName').value.trim();
-        if (!name) throw { code: 'name' };
-        await cloud.call('signUp', name, $('fEmail').value.trim(), $('fPass').value);
+        // Your username doubles as the name friends see.
+        const username = $('fUser').value.trim().toLowerCase().replace(/^@/, '');
+        const lbUser = $('fLb').value.trim().toLowerCase().replace(/^@/, '');
+        await cloud.call('signUp', username, username, $('fEmail').value.trim(), $('fPass').value);
+        if (lbUser) await cloud.call('saveMe', { lbUser }).catch(() => {});
       } else await cloud.call('signIn', $('fEmail').value.trim(), $('fPass').value);
-    } catch (err) { $('fError').textContent = err.code === 'name' ? 'Enter your name.' : authError(err); btn.disabled = false; }
-  } else if (f.id === 'joinForm') {
-    const code = $('joinCode').value.trim().toUpperCase();
-    if (!code) return;
-    try { await cloud.call('joinGroup', code); } catch (err) { $('gError').textContent = authError(err); }
+      authNote = '';
+    } catch (x) { $('fError').textContent = authError(x); btn.disabled = false; }
+  } else if (f.id === 'userForm') {
+    try { await cloud.call('setUsername', $('pickUser').value.trim(), state.account.name); }
+    catch (x) { $('uError').textContent = authError(x); }
   } else if (f.id === 'lbForm') {
     const lbUser = $('lbUser').value.trim().toLowerCase();
     await cloud.call('saveMe', { lbUser }).catch(() => {});
-    state.account.lbUser = lbUser; lbAppliedFor = null;
-    if (state.lbData) { lbAppliedFor = state.account.uid; applyLetterboxd(state.lbData); render(); }
+    state.account.lbUser = lbUser;
+    if (state.lbData) { lbAppliedFor = `${state.account.uid}:${lbUser}`; applyLetterboxd(state.lbData); render(); }
   }
 });
 document.addEventListener('click', e => {
@@ -834,7 +948,7 @@ startAccounts();
 load()
   .then(() => fetch('data/letterboxd.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(lb => {
     if (!lb) return;
-    if (state.account) lbAppliedFor = state.account.uid;
+    if (state.account) lbAppliedFor = `${state.account.uid}:${state.account.lbUser}`;
     applyLetterboxd(lb);
   }).catch(() => {}))
   .then(() => { render(); setStatus(); })

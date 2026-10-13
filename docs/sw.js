@@ -1,6 +1,6 @@
 // Opening Weeks service worker: network-first, so you always get the newest release data when online,
 // and the last loaded version (plus posters you've seen) when offline.
-const CACHE = 'opening-weeks-v4';
+const CACHE = 'opening-weeks-v5';
 const IMAGES = 'opening-weeks-img-v1';
 const SHELL = ['./', 'app.js', 'cloud.js', 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'data/releases.json'];
 
@@ -30,6 +30,12 @@ self.addEventListener('fetch', e => {
       }
       return res;
     }));
+    return;
+  }
+
+  // Firebase's scripts never change for a given version: cache them so the app (and your login) works offline.
+  if (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) {
+    e.respondWith(caches.open(CACHE).then(async c => (await c.match(e.request)) || fetch(e.request).then(res => { if (res.ok) c.put(e.request, res.clone()); return res; })));
     return;
   }
 
