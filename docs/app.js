@@ -194,12 +194,30 @@ function slot(film, s) {
   </div>`;
 }
 
+// View options for the double screenings list. Day is per visit; the rest is remembered.
+const DBL_KEY = 'opening-weeks:doubles';
+const dbl = (() => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(DBL_KEY)) || {}; } catch {}
+  return { day: null, part: saved.part || 'all', sort: saved.sort || 'start' };
+})();
+const PARTS = {
+  all: { label: 'All day', test: () => true },
+  morning: { label: 'Morning', test: h => h < 12 },
+  afternoon: { label: 'Afternoon', test: h => h >= 12 && h < 18 },
+  evening: { label: 'Evening', test: h => h >= 18 },
+};
+const SORTS = {
+  start: { label: 'Start time', cmp: (a, b) => a.s1.start.localeCompare(b.s1.start) || a.gap - b.gap },
+  wait: { label: 'Shortest wait', cmp: (a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.s1.start.localeCompare(b.s1.start) },
+  end: { label: 'Ends earliest', cmp: (a, b) => a.s2.end.localeCompare(b.s2.end) || a.s1.start.localeCompare(b.s1.start) },
+};
+const segButtons = (name, entries, current, label) =>
+  `<div class="seg" role="group" aria-label="${label}">${entries.map(([v, text]) => `<button type="button" data-dbl="${name}:${v}" aria-pressed="${String(v) === String(current)}">${text}</button>`).join('')}</div>`;
+
 function renderDoubles() {
   const head = `<div class="dbl-head"><h2>Double screenings</h2>
-    <p>Two films from your watchlist at Pathé De Kuip, where the second starts at most ${state.maxGap} minutes after the first ends. Overlaps up to ${LATE_ENTRY} minutes count too, since the listed start time is when the trailers begin.</p>
-    <div class="gapctl">Max break
-      <div class="seg" role="group" aria-label="Maximum break between films">${[15, 30, 45, 60].map(m => `<button type="button" data-gap="${m}" aria-pressed="${m === state.maxGap}">${m} min</button>`).join('')}</div>
-    </div></div>`;
+    <p>Watchlist films back to back at Pathé De Kuip. Walking in up to ${LATE_ENTRY} minutes late counts: that's trailer time.</p></div>`;
   const wrap = body => { $('main').innerHTML = `<div class="dbl">${head}${body}</div>`; };
 
   if (!state.showtimes) { wrap(state.showtimesError ? `<div class="empty"><p>Couldn't load the Pathé showtimes (${esc(state.showtimesError)}).</p></div>` : '<div class="skel" style="aspect-ratio:auto;height:160px"></div>'); return; }
@@ -210,34 +228,63 @@ function renderDoubles() {
   }
   const showings = watchlistShowings();
   const chips = `<div class="playing">${showings.map(s => `<span class="${s.screenings.length ? '' : 'off'}">${esc(s.film.title)}${s.screenings.length ? ` · ${s.screenings.length}×` : ''}</span>`).join('')}</div>`;
-  const pairs = findDoubles(showings);
-  if (!pairs.length) {
-    const playing = showings.filter(s => s.screenings.length).length;
-    wrap(`${chips}<div class="empty"><p>${playing < 2
-      ? `${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at Pathé De Kuip right now, so there's nothing to combine yet.`
-      : `No combinations with a break of ${state.maxGap} minutes or less. Try a longer break.`}</p></div>`);
+  const playing = showings.filter(s => s.screenings.length).length;
+  if (playing < 2) {
+    wrap(`${chips}<div class="empty"><p>${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at Pathé De Kuip right now, so there's nothing to combine yet.</p></div>`);
     return;
   }
+
+  // Filter by time of day (first film's start), then group by day.
+  const pairs = findDoubles(showings).filter(p => PARTS[dbl.part].test(Number(p.s1.start.slice(11, 13))));
   const byDay = new Map();
   pairs.forEach(p => { const d = p.s1.start.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(p); });
-  const days = [...byDay].map(([d, list]) => `<section>
-    <h3 class="day-h">${esc(fmt(parseDay(d), { weekday: 'long', day: 'numeric', month: 'short' }))}<span>${list.length} option${list.length === 1 ? '' : 's'}</span></h3>
+  if (!byDay.has(dbl.day)) dbl.day = byDay.keys().next().value || null;
+
+  const controls = `<div class="dbl-ctl">
+    <div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
+      <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>
+    ${segButtons('part', Object.entries(PARTS).map(([k, v]) => [k, v.label]), dbl.part, 'Time of day')}
+    <div class="selects">
+      <label>Sort<select id="dblSort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${k === dbl.sort ? ' selected' : ''}>${v.label}</option>`).join('')}</select></label>
+      <label>Max break<select id="dblGap">${[15, 30, 45, 60].map(m => `<option value="${m}"${m === state.maxGap ? ' selected' : ''}>${m} min</option>`).join('')}</select></label>
+    </div>
+  </div>`;
+
+  if (!dbl.day) {
+    wrap(`${chips}${controls}<div class="empty"><p>No combinations ${dbl.part === 'all' ? '' : `in the ${PARTS[dbl.part].label.toLowerCase()} `}with a break of ${state.maxGap} minutes or less. Try another time of day or a longer break.</p></div>`);
+    return;
+  }
+  const list = byDay.get(dbl.day).sort(SORTS[dbl.sort].cmp);
+  const day = `<section>
+    <h3 class="day-h">${esc(fmt(parseDay(dbl.day), { weekday: 'long', day: 'numeric', month: 'long' }))}<span>${list.length} option${list.length === 1 ? '' : 's'}</span></h3>
     <div class="pairs">${list.map(p => `<article class="pair">
       ${slot(p.first, p.s1)}
       <div class="gapline${p.gap < 0 ? ' late' : ''}">${p.gap > 0 ? `${p.gap} min break` : p.gap === 0 ? 'Starts right after'
         : `Walk in ${-p.gap} min late, during the trailers`}</div>
       ${slot(p.second, p.s2)}
       <div class="total">${hhmm(p.s1.start)} – ${hhmm(p.s2.end)} at Pathé De Kuip</div>
-    </article>`).join('')}</div></section>`).join('');
-  wrap(chips + days);
+    </article>`).join('')}</div></section>`;
+  wrap(chips + controls + day);
+  $('main').querySelector('.daychip[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
-document.addEventListener('click', e => {
-  const b = e.target.closest('[data-gap]');
-  if (!b) return;
-  state.maxGap = +b.dataset.gap;
-  try { localStorage.setItem('opening-weeks:gap', state.maxGap); } catch {}
+function setDoubleOption(name, value) {
+  if (name === 'gap') {
+    state.maxGap = +value;
+    try { localStorage.setItem('opening-weeks:gap', state.maxGap); } catch {}
+  } else {
+    dbl[name] = value;
+    try { localStorage.setItem(DBL_KEY, JSON.stringify({ part: dbl.part, sort: dbl.sort })); } catch {}
+  }
   renderDoubles();
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-dbl]');
+  if (b) setDoubleOption(...b.dataset.dbl.split(':'));
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'dblSort') setDoubleOption('sort', e.target.value);
+  if (e.target.id === 'dblGap') setDoubleOption('gap', e.target.value);
 });
 
 function render() {

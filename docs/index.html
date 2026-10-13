@@ -117,6 +117,24 @@ button { font: inherit; color: inherit; }
 .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: none; padding: 5px 11px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .seg button[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.dbl-ctl { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+.days-strip { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.days-strip::-webkit-scrollbar { display: none; }
+.daychip { flex: 0 0 auto; min-width: 58px; display: grid; justify-items: center; gap: 1px; padding: 7px 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; color: var(--muted); }
+.daychip span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.daychip b { font: 900 22px/1 var(--font-display); font-stretch: 80%; color: var(--fg); }
+.daychip small { font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.daychip[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #dbe6ff; }
+.daychip[aria-pressed="true"] b { color: #fff; }
+.dbl-ctl > .seg { display: flex; width: 100%; }
+.dbl-ctl > .seg button { flex: 1 1 auto; padding: 6px 6px; white-space: nowrap; }
+.selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.selects label { display: grid; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.selects select {
+  appearance: none; -webkit-appearance: none; width: 100%; font: 600 15px/1.2 var(--font-body); color: var(--fg);
+  background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2379a2ff' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center / 16px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 32px 9px 12px; text-transform: none; letter-spacing: 0;
+}
 .playing { display: flex; flex-wrap: wrap; gap: 6px; }
 .playing span { font-size: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 10px; }
 .playing .off { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
