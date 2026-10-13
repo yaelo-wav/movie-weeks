@@ -161,7 +161,8 @@ function watchlistShowings() {
   const now = new Date();
   return state.watchlist.map(i => filmFor(i.fv)).filter(Boolean).map(film => {
     const shows = (currentCinema()?.films || []).filter(s => (film.tmdb && s.tmdb === film.tmdb) || s.fv === film.fv);
-    const screenings = shows.flatMap(s => s.screenings).filter(s => toDate(s.start) > now);
+    const screenings = shows.flatMap(s => s.screenings)
+      .filter(s => toDate(s.start) > now && !s.formats.some(f => dbl.exclude.includes(f)));
     return { film, screenings };
   });
 }
@@ -195,7 +196,10 @@ const DBL_KEY = 'opening-weeks:doubles';
 const dbl = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(DBL_KEY)) || {}; } catch {}
-  return { day: null, cinema: saved.cinema || 'pathe-de-kuip', part: saved.part || 'all', sort: saved.sort || 'start' };
+  return {
+    day: null, cinema: saved.cinema || 'pathe-de-kuip', part: saved.part || 'all', sort: saved.sort || 'start',
+    exclude: Array.isArray(saved.exclude) ? saved.exclude : [], // special formats (Dolby, IMAX, 4DX…) to leave out
+  };
 })();
 const PARTS = {
   all: { label: 'All day', test: () => true },
@@ -238,7 +242,7 @@ function renderDoubles() {
   const showings = watchlistShowings();
   const playing = showings.filter(s => s.screenings.length).length;
   if (playing < 2) {
-    wrap(`<div class="dbl-ctl"><div class="selects">${cinemaSelect}</div></div>
+    wrap(`<div class="dbl-ctl"><div class="selects">${cinemaSelect}</div>${formatChips(cinema)}</div>
       <div class="empty"><p>${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at ${esc(cinema.name)} right now, so there's nothing to combine yet.</p></div>`);
     return;
   }
@@ -252,6 +256,7 @@ function renderDoubles() {
   const controls = `<div class="dbl-ctl">
     <div class="selects">${cinemaSelect}${sortSelect}</div>
     ${segButtons('part', Object.entries(PARTS).map(([k, v]) => [k, v.label]), dbl.part, 'Time of day')}
+    ${formatChips(cinema)}
     ${byDay.size ? `<div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
       <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>` : ''}
   </div>`;
@@ -274,10 +279,19 @@ function renderDoubles() {
   $('main').querySelector('.daychip[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
+// Toggle buttons for the special formats this cinema has. On = included.
+function formatChips(cinema) {
+  const formats = [...new Set(cinema.films.flatMap(f => f.screenings.flatMap(s => s.formats)))].sort();
+  if (!formats.length) return '';
+  return `<div class="formats" role="group" aria-label="Special screenings"><span>Include</span>${formats.map(f =>
+    `<button type="button" class="fmt" data-dbl="fmt:${esc(f)}" aria-pressed="${!dbl.exclude.includes(f)}">${esc(f)}</button>`).join('')}</div>`;
+}
+
 function setDoubleOption(name, value) {
-  dbl[name] = value;
+  if (name === 'fmt') dbl.exclude = dbl.exclude.includes(value) ? dbl.exclude.filter(f => f !== value) : [...dbl.exclude, value];
+  else dbl[name] = value;
   if (name === 'cinema') dbl.day = null;
-  try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, part: dbl.part, sort: dbl.sort })); } catch {}
+  try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, part: dbl.part, sort: dbl.sort, exclude: dbl.exclude })); } catch {}
   renderDoubles();
 }
 document.addEventListener('click', e => {
