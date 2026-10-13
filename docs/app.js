@@ -380,9 +380,14 @@ function renderWatchlist() {
   const keep = fv => state.wlFilter === 'all' ? true
     : state.wlFilter === 'solo' ? !fansOf(fv).length
     : friends.find(m => m.uid === state.wlFilter)?.watchlist.has(fv);
-  const options = [['all', 'All'], ['solo', 'Just me'], ...friends.map(m => [m.uid, `With ${m.name}`])];
-  const filterBar = friends.length ? `<div class="seg wlfilter" role="group" aria-label="Show">${options.map(([v, t]) =>
-    `<button type="button" data-wlfilter="${esc(v)}" aria-pressed="${state.wlFilter === v}">${esc(t)}</button>`).join('')}</div>` : '';
+  // All · Just me · With friend ▾ (a picker with your friends; shows the chosen friend's name).
+  const chosen = friends.find(m => m.uid === state.wlFilter);
+  const filterBar = friends.length ? `<div class="seg wlfilter" role="group" aria-label="Show">
+    ${[['all', 'All'], ['solo', 'Just me']].map(([v, t]) => `<button type="button" data-wlfilter="${v}" aria-pressed="${state.wlFilter === v}">${t}</button>`).join('')}
+    <label class="segpick" aria-pressed="${!!chosen}"><span>${chosen ? `With ${esc(chosen.name)}` : 'With friend'}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      <select id="wlFriend" aria-label="With friend"><option value=""${chosen ? '' : ' selected'} disabled>Choose a friend</option>${friends.map(m =>
+        `<option value="${esc(m.uid)}"${chosen?.uid === m.uid ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>
+  </div>` : '';
   state.watchlist.forEach(i => {
     const f = filmFor(i.fv);
     if (!f || !keep(i.fv)) return;
@@ -930,6 +935,11 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-wlfilter]');
   if (!b) return;
   state.wlFilter = b.dataset.wlfilter;
+  renderWatchlist();
+});
+document.addEventListener('change', e => {
+  if (e.target.id !== 'wlFriend' || !e.target.value) return;
+  state.wlFilter = e.target.value;
   renderWatchlist();
 });
 
