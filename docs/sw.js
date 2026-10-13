@@ -1,8 +1,8 @@
 // Opening Weeks service worker: network-first, so you always get the newest release data when online,
 // and the last loaded version (plus posters you've seen) when offline.
-const CACHE = 'opening-weeks-v3';
+const CACHE = 'opening-weeks-v4';
 const IMAGES = 'opening-weeks-img-v1';
-const SHELL = ['./', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'data/releases.json'];
+const SHELL = ['./', 'app.js', 'cloud.js', 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'data/releases.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

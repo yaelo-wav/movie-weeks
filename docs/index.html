@@ -50,7 +50,36 @@ button { font: inherit; color: inherit; }
 
 /* Top bar */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.brand { margin: 0; font: 800 22px/1 var(--font-display); font-stretch: 75%; text-transform: uppercase; letter-spacing: .02em; }
+.brand { margin: 0 auto 0 0; font: 800 22px/1 var(--font-display); font-stretch: 75%; text-transform: uppercase; letter-spacing: .02em; }
+.acct { order: 3; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; display: grid; place-items: center; font: 800 16px/1 var(--font-display); }
+.acct svg { width: 18px; height: 18px; }
+.acct.in { background: var(--blue); border-color: var(--blue); color: #fff; }
+.with { color: #c9a7ff; font-weight: 600; }
+.wlfilter { margin-top: 10px; }
+
+/* Account sheet */
+#acct { width: min(440px, calc(100vw - 24px)); }
+.acct-sheet { position: relative; padding: 26px 20px 22px; }
+.acct-sheet .close { background: var(--raised); }
+.acct-body { display: grid; gap: 14px; }
+.acct-body h2 { margin: 0; padding-right: 44px; font: 900 30px/1 var(--font-display); font-stretch: 72%; text-transform: uppercase; }
+.acct-body p { margin: 0; }
+.muted { color: var(--muted); font-size: 14px; }
+.small { font-size: 12.5px; }
+.form { display: grid; gap: 12px; }
+.field { display: grid; gap: 5px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.field input, .joinrow input { font: 500 16px/1.2 var(--font-body); color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; text-transform: none; letter-spacing: 0; width: 100%; }
+.field input:focus, .joinrow input:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.field small { font-weight: 500; letter-spacing: 0; text-transform: none; }
+.form-error { color: #ff8a80; font-size: 13px; min-height: 1em; }
+.form-error:empty { display: none; }
+.switch { font-size: 14px; color: var(--muted); }
+.switch button { background: none; border: 0; padding: 0; color: var(--blue-text); cursor: pointer; font: inherit; font-weight: 600; }
+.acct-sec { display: grid; gap: 10px; padding: 14px 0; border-top: 1px solid var(--line); }
+.acct-sec h4 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.codebox { display: flex; gap: 8px; align-items: center; }
+.codebox code { flex: 1; font: 800 24px/1 var(--font-display); letter-spacing: .14em; background: var(--raised); border: 1px dashed var(--blue); border-radius: 10px; padding: 10px 12px; text-align: center; color: var(--blue-text); user-select: all; }
+.joinrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .brand span { color: var(--blue-text); }
 .tabs { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
 .tabs button { border: 0; background: none; padding: 7px 14px; border-radius: 999px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
@@ -233,7 +262,8 @@ a.tchip:hover, a.tchip:active { border-color: var(--blue); }
 .links a { color: var(--blue-text); text-decoration: none; }
 
 @media (max-width: 560px) {
-  .tabs { width: 100%; }
+  .tabs { width: 100%; order: 4; }
+  .acct { order: 2; }
   .tabs button { flex: 1 1 auto; justify-content: center; padding: 7px 8px; font-size: 13px; white-space: nowrap; }
   .grid { gap: 18px 12px; }
   .card h3 { font-size: 15px; }
@@ -249,6 +279,7 @@ a.tchip:hover, a.tchip:active { border-color: var(--blue); }
 <div class="wrap">
   <header class="top">
     <h1 class="brand">Opening <span>Weeks</span></h1>
+    <button class="acct" id="acctBtn" type="button" aria-label="Log in or create an account" hidden></button>
     <div class="tabs" role="tablist" aria-label="Views">
       <button type="button" role="tab" id="tabReleases" aria-selected="true">Releases</button>
       <button type="button" role="tab" id="tabWatchlist" aria-selected="false">Watchlist <span class="n" id="wlCount" hidden>0</span></button>
@@ -276,6 +307,16 @@ a.tchip:hover, a.tchip:active { border-color: var(--blue); }
 </div>
 
 <dialog id="detail" aria-labelledby="dTitle"></dialog>
+
+<dialog id="acct" aria-labelledby="acctTitle">
+  <div class="acct-sheet">
+    <button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div class="acct-body"></div>
+  </div>
+</dialog>
+
+<script src="firebase-config.js"></script>
+<script src="cloud.js"></script>
 
 <script src="app.js"></script>
 </body>
