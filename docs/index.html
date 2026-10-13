@@ -132,6 +132,8 @@ button { font: inherit; color: inherit; }
 .book { font-size: 13px; font-weight: 700; color: #fff; background: var(--blue); text-decoration: none; padding: 7px 12px; border-radius: 999px; white-space: nowrap; }
 .gapline { display: flex; align-items: center; gap: 10px; margin: 8px 0 8px 21px; font-size: 12px; font-weight: 600; color: var(--blue-text); }
 .gapline::before { content: ""; width: 2px; height: 22px; background: linear-gradient(var(--blue), transparent); border-radius: 2px; }
+.gapline.late { color: #f5b14c; }
+.gapline.late::before { background: linear-gradient(#f5b14c, transparent); }
 .pair .total { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .more { justify-self: center; }

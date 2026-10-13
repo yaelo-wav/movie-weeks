@@ -151,6 +151,7 @@ function renderWatchlist() {
 
 // ---------- shell ----------
 // ---------- double screenings ----------
+const LATE_ENTRY = 15; // minutes of trailers/ads after the listed start time
 function loadGap() {
   try { return Number(localStorage.getItem('opening-weeks:gap')) || 30; } catch { return 30; }
 }
@@ -174,8 +175,10 @@ function findDoubles(showings) {
   for (const a of showings) for (const b of showings) {
     if (a.film.fv === b.film.fv) continue;
     for (const s1 of a.screenings) for (const s2 of b.screenings) {
+      // Negative gap: film 2's listed start is before film 1 ends. That's fine up to LATE_ENTRY minutes,
+      // because Pathé's listed start time is when the trailers and ads begin.
       const gap = (toDate(s2.start) - toDate(s1.end)) / 60000;
-      if (gap >= 0 && gap <= state.maxGap) pairs.push({ first: a.film, s1, second: b.film, s2, gap });
+      if (gap >= -LATE_ENTRY && gap <= state.maxGap) pairs.push({ first: a.film, s1, second: b.film, s2, gap });
     }
   }
   return pairs.sort((x, y) => x.s1.start.localeCompare(y.s1.start) || x.gap - y.gap);
@@ -193,7 +196,7 @@ function slot(film, s) {
 
 function renderDoubles() {
   const head = `<div class="dbl-head"><h2>Double screenings</h2>
-    <p>Two films from your watchlist at Pathé De Kuip, where the second starts at most ${state.maxGap} minutes after the first ends.</p>
+    <p>Two films from your watchlist at Pathé De Kuip, where the second starts at most ${state.maxGap} minutes after the first ends. Overlaps up to ${LATE_ENTRY} minutes count too, since the listed start time is when the trailers begin.</p>
     <div class="gapctl">Max break
       <div class="seg" role="group" aria-label="Maximum break between films">${[15, 30, 45, 60].map(m => `<button type="button" data-gap="${m}" aria-pressed="${m === state.maxGap}">${m} min</button>`).join('')}</div>
     </div></div>`;
@@ -221,7 +224,8 @@ function renderDoubles() {
     <h3 class="day-h">${esc(fmt(parseDay(d), { weekday: 'long', day: 'numeric', month: 'short' }))}<span>${list.length} option${list.length === 1 ? '' : 's'}</span></h3>
     <div class="pairs">${list.map(p => `<article class="pair">
       ${slot(p.first, p.s1)}
-      <div class="gapline">${p.gap ? `${p.gap} min break` : 'Starts right after'}</div>
+      <div class="gapline${p.gap < 0 ? ' late' : ''}">${p.gap > 0 ? `${p.gap} min break` : p.gap === 0 ? 'Starts right after'
+        : `Walk in ${-p.gap} min late, during the trailers`}</div>
       ${slot(p.second, p.s2)}
       <div class="total">${hhmm(p.s1.start)} – ${hhmm(p.s2.end)} at Pathé De Kuip</div>
     </article>`).join('')}</div></section>`).join('');

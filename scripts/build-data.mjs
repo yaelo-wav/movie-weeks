@@ -122,11 +122,12 @@ writeJson(MAP, map);
 const details = await pool(upcoming, 8, f => f.tmdb ? tmdb(`/movie/${f.tmdb}`, { language: 'en-US', append_to_response: 'credits,release_dates' }) : null);
 const films = upcoming.map((f, i) => film(f, details[i]));
 
-// Films that already opened drop off Filmvandaag's list; keep them from the previous run for a while.
-const today = new Date().toISOString().slice(0, 10);
-const cutoff = new Date(Date.now() - KEEP_PAST_DAYS * 864e5).toISOString().slice(0, 10);
+// Films drop off Filmvandaag's "coming soon" list once they open, and sometimes a few days before.
+// Keep them from the previous run for a while; films more than a week out that vanish were probably postponed.
+const day = offset => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
+const cutoff = day(-KEEP_PAST_DAYS), soon = day(7);
 const current = new Set(films.map(f => f.fv));
-const previous = readJson(OUT, { films: [] }).films.filter(f => !current.has(f.fv) && f.nl < today && f.nl >= cutoff);
+const previous = readJson(OUT, { films: [] }).films.filter(f => !current.has(f.fv) && f.nl >= cutoff && f.nl <= soon);
 
 writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: [...previous, ...films] });
 console.log(`Wrote ${films.length + previous.length} films (${films.filter(f => f.tmdb).length} matched on TMDB, ${previous.length} kept from earlier)`);
