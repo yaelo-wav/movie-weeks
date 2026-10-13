@@ -71,6 +71,7 @@ function toggleSave(fv) {
 }
 function updateSaveButton(b) {
   const fv = +b.dataset.save, saved = onList(fv), title = filmFor(fv)?.title || '';
+  b.hidden = state.watched.has(fv); // no point saving a film you've already seen
   b.setAttribute('aria-pressed', saved);
   if (b.classList.contains('add')) b.innerHTML = `${saved ? ICON.check : ICON.add}<span>${saved ? 'On your watchlist' : 'Add to watchlist'}</span>`;
   else { b.innerHTML = saved ? ICON.check : ICON.add; b.setAttribute('aria-label', `${saved ? 'Remove from' : 'Add to'} watchlist: ${title}`); }
