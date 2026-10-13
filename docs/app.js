@@ -11,14 +11,19 @@ const ICON = {
 };
 
 const state = {
-  view: location.hash === '#watchlist' ? 'watchlist' : 'releases',
+  view: viewFromHash(),
   selected: mondayOf(new Date()),
   shown: PAGE,
   films: null,        // fv id -> film
   byWeek: new Map(),  // monday key -> films sorted by popularity
   generatedAt: null,
   watchlist: loadWatchlist(), // [{ fv, addedAt, film }]
+  showtimes: null,    // Pathé De Kuip screenings, from data/showtimes.json
+  maxGap: loadGap(),  // minutes allowed between film 1 ending and film 2 starting
 };
+function viewFromHash() {
+  return { '#watchlist': 'watchlist', '#doubles': 'doubles' }[location.hash] || 'releases';
+}
 
 // ---------- dates ----------
 function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -60,6 +65,7 @@ function toggleSave(fv) {
   saveWatchlist();
   updateCount();
   if (state.view === 'watchlist') renderWatchlist();
+  if (state.view === 'doubles') renderDoubles();
   document.querySelectorAll(`[data-save="${fv}"]`).forEach(updateSaveButton);
 }
 function updateSaveButton(b) {
@@ -144,15 +150,104 @@ function renderWatchlist() {
 }
 
 // ---------- shell ----------
+// ---------- double screenings ----------
+function loadGap() {
+  try { return Number(localStorage.getItem('opening-weeks:gap')) || 30; } catch { return 30; }
+}
+// "2026-10-16T11:30" as local time (avoids Safari's inconsistent parsing).
+const toDate = s => { const [d, t] = s.split('T'); const [y, m, dd] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number); return new Date(y, m - 1, dd, h, mi); };
+const hhmm = s => s.slice(11, 16);
+const screenName = s => { const n = s.screen.match(/^\d+/)?.[0]; return n ? `Screen ${n}` : s.screen; };
+
+// Pathé screenings for each watchlist film: [{ film, screenings }]
+function watchlistShowings() {
+  const now = new Date();
+  return state.watchlist.map(i => filmFor(i.fv)).filter(Boolean).map(film => {
+    const shows = (state.showtimes?.films || []).filter(s => (film.tmdb && s.tmdb === film.tmdb) || s.fv === film.fv);
+    const screenings = shows.flatMap(s => s.screenings).filter(s => toDate(s.start) > now);
+    return { film, screenings };
+  });
+}
+
+function findDoubles(showings) {
+  const pairs = [];
+  for (const a of showings) for (const b of showings) {
+    if (a.film.fv === b.film.fv) continue;
+    for (const s1 of a.screenings) for (const s2 of b.screenings) {
+      const gap = (toDate(s2.start) - toDate(s1.end)) / 60000;
+      if (gap >= 0 && gap <= state.maxGap) pairs.push({ first: a.film, s1, second: b.film, s2, gap });
+    }
+  }
+  return pairs.sort((x, y) => x.s1.start.localeCompare(y.s1.start) || x.gap - y.gap);
+}
+
+function slot(film, s) {
+  const meta = [screenName(s), ...s.formats, s.version].filter(Boolean).join(' · ');
+  const thumb = film.poster ? `style="background-image:url('${IMG}w154${film.poster}')"` : '';
+  return `<div class="slot">
+    <button class="thumb" type="button" data-open="${film.fv}" aria-label="${esc(film.title)}: details" ${thumb}></button>
+    <div><b>${esc(film.title)}</b><span class="time">${hhmm(s.start)} – ${hhmm(s.end)}</span><span class="meta">${esc(meta)}${s.soldOut ? ' · Sold out' : ''}</span></div>
+    ${s.book && !s.soldOut ? `<a class="book" href="${esc(s.book)}" target="_blank" rel="noopener">Book</a>` : ''}
+  </div>`;
+}
+
+function renderDoubles() {
+  const head = `<div class="dbl-head"><h2>Double screenings</h2>
+    <p>Two films from your watchlist at Pathé De Kuip, where the second starts at most ${state.maxGap} minutes after the first ends.</p>
+    <div class="gapctl">Max break
+      <div class="seg" role="group" aria-label="Maximum break between films">${[15, 30, 45, 60].map(m => `<button type="button" data-gap="${m}" aria-pressed="${m === state.maxGap}">${m} min</button>`).join('')}</div>
+    </div></div>`;
+  const wrap = body => { $('main').innerHTML = `<div class="dbl">${head}${body}</div>`; };
+
+  if (!state.showtimes) { wrap(state.showtimesError ? `<div class="empty"><p>Couldn't load the Pathé showtimes (${esc(state.showtimesError)}).</p></div>` : '<div class="skel" style="aspect-ratio:auto;height:160px"></div>'); return; }
+  if (state.watchlist.length < 2) {
+    wrap(`<div class="empty"><p>Add at least two films to your watchlist to find double screenings.</p><button class="btn primary" type="button" id="toReleases">Browse releases</button></div>`);
+    $('toReleases').addEventListener('click', () => setView('releases'));
+    return;
+  }
+  const showings = watchlistShowings();
+  const chips = `<div class="playing">${showings.map(s => `<span class="${s.screenings.length ? '' : 'off'}">${esc(s.film.title)}${s.screenings.length ? ` · ${s.screenings.length}×` : ''}</span>`).join('')}</div>`;
+  const pairs = findDoubles(showings);
+  if (!pairs.length) {
+    const playing = showings.filter(s => s.screenings.length).length;
+    wrap(`${chips}<div class="empty"><p>${playing < 2
+      ? `${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at Pathé De Kuip right now, so there's nothing to combine yet.`
+      : `No combinations with a break of ${state.maxGap} minutes or less. Try a longer break.`}</p></div>`);
+    return;
+  }
+  const byDay = new Map();
+  pairs.forEach(p => { const d = p.s1.start.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(p); });
+  const days = [...byDay].map(([d, list]) => `<section>
+    <h3 class="day-h">${esc(fmt(parseDay(d), { weekday: 'long', day: 'numeric', month: 'short' }))}<span>${list.length} option${list.length === 1 ? '' : 's'}</span></h3>
+    <div class="pairs">${list.map(p => `<article class="pair">
+      ${slot(p.first, p.s1)}
+      <div class="gapline">${p.gap ? `${p.gap} min break` : 'Starts right after'}</div>
+      ${slot(p.second, p.s2)}
+      <div class="total">${hhmm(p.s1.start)} – ${hhmm(p.s2.end)} at Pathé De Kuip</div>
+    </article>`).join('')}</div></section>`).join('');
+  wrap(chips + days);
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-gap]');
+  if (!b) return;
+  state.maxGap = +b.dataset.gap;
+  try { localStorage.setItem('opening-weeks:gap', state.maxGap); } catch {}
+  renderDoubles();
+});
+
 function render() {
   $('tabReleases').setAttribute('aria-selected', state.view === 'releases');
   $('tabWatchlist').setAttribute('aria-selected', state.view === 'watchlist');
+  $('tabDoubles').setAttribute('aria-selected', state.view === 'doubles');
   $('weekbar').hidden = state.view !== 'releases';
-  if (state.view === 'releases') { renderWeekbar(); renderReleases(); } else renderWatchlist();
+  if (state.view === 'releases') { renderWeekbar(); renderReleases(); }
+  else if (state.view === 'watchlist') renderWatchlist();
+  else renderDoubles();
 }
 function setView(v) {
   state.view = v;
-  history.replaceState(null, '', v === 'watchlist' ? '#watchlist' : location.pathname);
+  history.replaceState(null, '', v === 'releases' ? location.pathname : `#${v}`);
   render();
   window.scrollTo(0, 0);
 }
@@ -223,7 +318,8 @@ document.addEventListener('click', e => {
 $('detail').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $('tabReleases').addEventListener('click', () => setView('releases'));
 $('tabWatchlist').addEventListener('click', () => setView('watchlist'));
-window.addEventListener('hashchange', () => setView(location.hash === '#watchlist' ? 'watchlist' : 'releases'));
+$('tabDoubles').addEventListener('click', () => setView('doubles'));
+window.addEventListener('hashchange', () => setView(viewFromHash()));
 $('prev').addEventListener('click', () => select(addDays(state.selected, -7)));
 $('next').addEventListener('click', () => select(addDays(state.selected, 7)));
 document.addEventListener('keydown', e => {
@@ -270,5 +366,10 @@ load().then(() => { render(); setStatus(); })
     state.films = state.films || new Map();
     render();
   });
+fetch('data/showtimes.json', { cache: 'no-store' })
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(data => { state.showtimes = data; })
+  .catch(err => { state.showtimesError = err.message; })
+  .finally(() => { if (state.view === 'doubles') renderDoubles(); });
 setInterval(setStatus, 60000);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

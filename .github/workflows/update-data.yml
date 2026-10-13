@@ -35,6 +35,11 @@ jobs:
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
 
+      - name: Fetch Pathé De Kuip showtimes
+        run: node scripts/build-showtimes.mjs
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+
       # Save the data (and the Filmvandaag-to-TMDB matches) so past weeks and matches carry over between runs.
       - name: Commit updated data
         run: |

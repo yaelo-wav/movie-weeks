@@ -4,7 +4,9 @@ Films opening in Dutch cinemas, week by week, with a personal watchlist. Runs as
 
 - **Dutch release dates** come from [Filmvandaag](https://www.filmvandaag.nl/nieuwefilms).
 - **Posters, synopsis, cast and US dates** come from [TMDB](https://www.themoviedb.org).
-- A GitHub Action rebuilds `docs/data/releases.json` every 6 hours and republishes the site.
+- **Showtimes** for Pathé De Kuip (Rotterdam) come from Pathé's website and power the *Double screenings* tab:
+  pairs of watchlist films where the second starts within 15–60 minutes (default 30) of the first ending.
+- A GitHub Action rebuilds `docs/data/releases.json` and `docs/data/showtimes.json` every 6 hours and republishes the site.
 - Your watchlist is stored on your phone (no account, no server).
 
 ## One-time setup
