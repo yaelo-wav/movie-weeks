@@ -172,7 +172,8 @@ function renderWatchlist() {
     <div class="grid">${films.map(f => card(f)).join('')}</div></section>`;
   const parts = [...groups.keys()].sort().map(m =>
     section(weekTitle(parseDay(m)), rangeLabel(parseDay(m)), groups.get(m).sort((a, b) => a.nl.localeCompare(b.nl)), m === thisMonday));
-  if (past.length) parts.push(section('Already in cinemas', '', past.sort((a, b) => b.nl.localeCompare(a.nl))));
+  // Films you can already see go first: they're the ones to plan for now.
+  if (past.length) parts.unshift(section('Already in cinemas', '', past.sort((a, b) => b.nl.localeCompare(a.nl))));
   const n = state.watchlist.length;
   $('main').innerHTML = `<div class="wl"><div class="wl-head"><h2>Watchlist</h2><p>${n} film${n === 1 ? '' : 's'} by the week they open in Dutch cinemas</p></div>${parts.join('')}</div>`;
   hydrateButtons($('main'));
