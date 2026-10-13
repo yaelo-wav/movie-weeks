@@ -1,9 +1,11 @@
-# Rebuilds the release data every 6 hours and publishes the site to GitHub Pages. Free for public repos.
+# Rebuilds the release data and Pathé showtimes every Monday evening and publishes the site to GitHub Pages.
+# Pathé publishes the new week's showtimes on Monday at 18:00 Dutch time. Free for public repos.
 name: Update releases
 
 on:
   schedule:
-    - cron: '23 */6 * * *'
+    # Mondays 18:00 UTC = 19:00 Dutch winter time, 20:00 summer time (always after Pathé's 18:00 update).
+    - cron: '0 18 * * 1'
   workflow_dispatch:
   push:
     branches: [main]

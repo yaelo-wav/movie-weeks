@@ -7,7 +7,7 @@ Films opening in Dutch cinemas, week by week, with a personal watchlist. Runs as
 - **Showtimes** for Pathé De Kuip and Pathé Schouwburgplein (Rotterdam) come from Pathé's website and power the
   *Double screenings* tab: pairs of watchlist films where the second starts at most 30 minutes after the first ends
   (or up to 15 minutes before, since the listed start time includes trailers).
-- A GitHub Action rebuilds `docs/data/releases.json` and `docs/data/showtimes.json` every 6 hours and republishes the site.
+- A GitHub Action rebuilds `docs/data/releases.json` and `docs/data/showtimes.json` every Monday evening (after Pathé publishes the new week at 18:00) and republishes the site.
 - Your watchlist is stored on your phone (no account, no server).
 
 ## One-time setup
@@ -23,7 +23,7 @@ Films opening in Dutch cinemas, week by week, with a personal watchlist. Runs as
    `https://<your-github-username>.github.io/movie-weeks/`.
 5. **On your iPhone**: open that address in Safari → Share → **Add to Home Screen**.
 
-After that it updates itself every 6 hours. To publish changes to the app, commit and push in GitHub Desktop.
+After that it updates itself every Monday evening. To refresh sooner: Actions → *Update releases* → *Run workflow*. To publish changes to the app, commit and push in GitHub Desktop.
 
 ## On your PC
 
@@ -34,4 +34,4 @@ After that it updates itself every 6 hours. To publish changes to the app, commi
 
 - The watchlist lives in the home-screen app's storage. Deleting the app from your home screen deletes the watchlist.
 - Films without a TMDB match (mostly small Dutch titles) show without a poster.
-- GitHub pauses scheduled Actions in repos with no activity for 60 days; the data commits every 6 hours count as activity.
+- GitHub pauses scheduled Actions in repos with no activity for 60 days; the weekly data commits count as activity.
