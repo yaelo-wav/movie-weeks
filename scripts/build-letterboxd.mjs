@@ -43,11 +43,28 @@ for (const slug of new Set(slugs)) {
 writeJson(SLUGS, cache);
 const watchlist = [...new Set(slugs.map(s => cache[s]?.tmdb).filter(Boolean))];
 
-// Diary: the RSS feed has the most recent entries with their TMDB ids.
+// Watched: every film on the profile's Films pages (marked watched, logged or not), matched to TMDB through the
+// Letterboxd slugs the release data already knows (from the rating lookup). The diary RSS adds the most recent
+// entries with their TMDB ids directly, which covers films logged before the next weekly rating lookup.
+// Only the first page is open to bots (later pages answer 403), so read that one and remember everything seen:
+// the list of watched films grows with every daily run.
+const watchedSlugs = new Set();
+const filmsHtml = await getText(`https://letterboxd.com/${USER}/films/`);
+[...filmsHtml.matchAll(/data-item-slug="([^"]+)"/g)].forEach(m => watchedSlugs.add(m[1]));
+const releases = readJson(path.join(ROOT, 'docs', 'data', 'releases.json'), { films: [] }).films;
+const fromFilms = releases.filter(f => f.lb?.slug && watchedSlugs.has(f.lb.slug)).map(f => f.tmdb);
+const fromCache = [...watchedSlugs].map(s => cache[s]?.tmdb).filter(Boolean);
+
 const rss = await getText(`https://letterboxd.com/${USER}/rss/`);
-const watched = [...new Set([...rss.matchAll(/<item>[\s\S]*?<\/item>/g)]
+const fromDiary = [...rss.matchAll(/<item>[\s\S]*?<\/item>/g)]
   .map(m => Number(m[0].match(/<tmdb:movieId>(\d+)<\/tmdb:movieId>/)?.[1]))
-  .filter(Boolean))];
+  .filter(Boolean);
+// Keep everything seen before, plus films from a Letterboxd data export (cache/letterboxd-history.json, made by
+// scripts/import-letterboxd-export.mjs).
+const previous = readJson(OUT, { watched: [] }).watched || [];
+const history = readJson(path.join(ROOT, 'cache', 'letterboxd-history.json'), { watched: [] }).watched || [];
+const watched = [...new Set([...previous, ...history, ...fromFilms, ...fromCache, ...fromDiary])];
+console.log(`Watched: ${watchedSlugs.size} films on the profile, ${new Set([...fromFilms, ...fromCache]).size} matched, ${fromDiary.length} from the diary feed`);
 
 writeJson(OUT, { user: USER, generatedAt: new Date().toISOString(), watchlist, watched });
 console.log(`Letterboxd ${USER}: ${watchlist.length} films on the watchlist, ${watched.length} recently logged`);
