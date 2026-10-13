@@ -197,23 +197,27 @@ const dbl = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(DBL_KEY)) || {}; } catch {}
   return {
-    day: null, cinema: saved.cinema || 'pathe-de-kuip', part: saved.part || 'all', sort: saved.sort || 'start',
+    day: null, cinema: saved.cinema || 'pathe-de-kuip', sort: saved.sort || 'start',
+    from: saved.from ?? '', until: saved.until ?? '', // earliest start / latest end, in minutes after midnight ('' = any)
     exclude: Array.isArray(saved.exclude) ? saved.exclude : [], // special formats (Dolby, IMAX, 4DX…) to leave out
   };
 })();
-const PARTS = {
-  all: { label: 'All day', test: () => true },
-  morning: { label: 'Morning', test: h => h < 12 },
-  afternoon: { label: 'Afternoon', test: h => h >= 12 && h < 18 },
-  evening: { label: 'Evening', test: h => h >= 18 },
-};
+// Dropdown choices: earliest start 09:00–22:00, latest end 15:00–02:00 (past midnight counts as the same evening).
+const FROM_HOURS = Array.from({ length: 14 }, (_, i) => 9 + i);
+const UNTIL_HOURS = Array.from({ length: 12 }, (_, i) => 15 + i);
+const hourLabel = h => `${String(h % 24).padStart(2, '0')}:00`;
+// Minutes after midnight of `day` (so 00:30 the next day is 1470).
+const minutesFrom = (day, s) => (toDate(s) - toDate(`${day}T00:00`)) / 60000;
+function inWindow(p) {
+  const day = p.s1.start.slice(0, 10);
+  return (dbl.from === '' || minutesFrom(day, p.s1.start) >= +dbl.from)
+    && (dbl.until === '' || minutesFrom(day, p.s2.end) <= +dbl.until);
+}
 const SORTS = {
   start: { label: 'Start time', cmp: (a, b) => a.s1.start.localeCompare(b.s1.start) || a.gap - b.gap },
   wait: { label: 'Shortest wait', cmp: (a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.s1.start.localeCompare(b.s1.start) },
   end: { label: 'Ends earliest', cmp: (a, b) => a.s2.end.localeCompare(b.s2.end) || a.s1.start.localeCompare(b.s1.start) },
 };
-const segButtons = (name, entries, current, label) =>
-  `<div class="seg" role="group" aria-label="${label}">${entries.map(([v, text]) => `<button type="button" data-dbl="${name}:${v}" aria-pressed="${String(v) === String(current)}">${text}</button>`).join('')}</div>`;
 
 function cinemaList() {
   const st = state.showtimes;
@@ -238,6 +242,10 @@ function renderDoubles() {
   const cinema = currentCinema();
   const cinemaSelect = `<label>Cinema<select id="dblCinema">${cinemaList().map(c => `<option value="${c.slug}"${c.slug === cinema.slug ? ' selected' : ''}>${esc(c.name.replace(/^Pathé\s+/, ''))}</option>`).join('')}</select></label>`;
   const sortSelect = `<label>Sort<select id="dblSort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${k === dbl.sort ? ' selected' : ''}>${v.label}</option>`).join('')}</select></label>`;
+  const timeSelect = (id, label, hours, value, anyLabel) => `<label>${label}<select id="${id}"><option value=""${value === '' ? ' selected' : ''}>${anyLabel}</option>${hours.map(h =>
+    `<option value="${h * 60}"${String(h * 60) === String(value) ? ' selected' : ''}>${hourLabel(h)}</option>`).join('')}</select></label>`;
+  const fromSelect = timeSelect('dblFrom', 'Start from', FROM_HOURS, dbl.from, 'Any time');
+  const untilSelect = timeSelect('dblUntil', 'End by', UNTIL_HOURS, dbl.until, 'Any time');
 
   const showings = watchlistShowings();
   const playing = showings.filter(s => s.screenings.length).length;
@@ -247,22 +255,22 @@ function renderDoubles() {
     return;
   }
 
-  // Filter by time of day (first film's start), then group by day.
-  const pairs = findDoubles(showings).filter(p => PARTS[dbl.part].test(Number(p.s1.start.slice(11, 13))));
+  // Keep pairs inside the chosen start/end window, then group by day.
+  const pairs = findDoubles(showings).filter(inWindow);
   const byDay = new Map();
   pairs.forEach(p => { const d = p.s1.start.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(p); });
   if (!byDay.has(dbl.day)) dbl.day = byDay.keys().next().value || null;
 
   const controls = `<div class="dbl-ctl">
-    <div class="selects">${cinemaSelect}${sortSelect}</div>
-    ${segButtons('part', Object.entries(PARTS).map(([k, v]) => [k, v.label]), dbl.part, 'Time of day')}
+    <div class="selects">${cinemaSelect}${sortSelect}${fromSelect}${untilSelect}</div>
     ${formatChips(cinema)}
     ${byDay.size ? `<div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
       <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>` : ''}
   </div>`;
 
   if (!dbl.day) {
-    wrap(`${controls}<div class="empty"><p>No double screenings ${dbl.part === 'all' ? '' : `in the ${PARTS[dbl.part].label.toLowerCase()} `}at ${esc(cinema.name)}.${dbl.part === 'all' ? '' : ' Try another time of day.'}</p></div>`);
+    const limited = dbl.from !== '' || dbl.until !== '';
+    wrap(`${controls}<div class="empty"><p>No double screenings at ${esc(cinema.name)}${limited ? ' within these times. Try a wider window.' : '.'}</p></div>`);
     return;
   }
   const list = byDay.get(dbl.day).sort(SORTS[dbl.sort].cmp);
@@ -291,7 +299,7 @@ function setDoubleOption(name, value) {
   if (name === 'fmt') dbl.exclude = dbl.exclude.includes(value) ? dbl.exclude.filter(f => f !== value) : [...dbl.exclude, value];
   else dbl[name] = value;
   if (name === 'cinema') dbl.day = null;
-  try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, part: dbl.part, sort: dbl.sort, exclude: dbl.exclude })); } catch {}
+  try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, sort: dbl.sort, from: dbl.from, until: dbl.until, exclude: dbl.exclude })); } catch {}
   renderDoubles();
 }
 document.addEventListener('click', e => {
@@ -301,6 +309,8 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   if (e.target.id === 'dblSort') setDoubleOption('sort', e.target.value);
   if (e.target.id === 'dblCinema') setDoubleOption('cinema', e.target.value);
+  if (e.target.id === 'dblFrom') setDoubleOption('from', e.target.value);
+  if (e.target.id === 'dblUntil') setDoubleOption('until', e.target.value);
 });
 
 function render() {
