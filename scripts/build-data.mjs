@@ -58,6 +58,20 @@ function parseList(html) {
   }).filter(Boolean);
 }
 
+// "Now in cinemas" list: same items, but without a release date.
+function parseNowShowing(html) {
+  return html.split('<li class="item is-movie">').slice(1).map(item => {
+    const link = item.match(/href="\/film\/(\d+)-([^"]+)"/);
+    const alt = item.match(/alt="([^"]+)"/);
+    if (!link || !alt) return null;
+    const t = decode(alt[1]).match(/^(.*?)(?: \((\d{4})\))?$/);
+    return {
+      fv: Number(link[1]), slug: link[2], title: t[1], year: t[2] ? Number(t[2]) : null,
+      fvDirectors: [...item.matchAll(/href='\/regisseur\/[^']*'>([^<]+)</g)].map(x => decode(x[1])),
+    };
+  }).filter(Boolean);
+}
+
 // Match a Filmvandaag film to TMDB: via the IMDb ID on its film page, else by title + year.
 async function resolve(f, map) {
   const known = map[f.fv];
@@ -115,19 +129,37 @@ const upcoming = parseList(listHtml);
 if (upcoming.length < 20) throw new Error(`Only ${upcoming.length} films parsed from Filmvandaag; page layout may have changed`);
 console.log(`Filmvandaag: ${upcoming.length} upcoming films`);
 
+// Films already in cinemas, so earlier weeks stay filled while those films are still playing.
+const upcomingIds = new Set(upcoming.map(f => f.fv));
+const nowShowing = parseNowShowing(await (await get('https://www.filmvandaag.nl/bioscoop')).text()).filter(f => !upcomingIds.has(f.fv));
+if (nowShowing.length < 20) throw new Error(`Only ${nowShowing.length} films parsed from Filmvandaag's now-showing list; page layout may have changed`);
+console.log(`Filmvandaag: ${nowShowing.length} films now in cinemas`);
+
 const map = readJson(MAP, {});
-for (const f of upcoming) f.tmdb = await resolve(f, map);
+for (const f of [...upcoming, ...nowShowing]) f.tmdb = await resolve(f, map);
 writeJson(MAP, map);
 
-const details = await pool(upcoming, 8, f => f.tmdb ? tmdb(`/movie/${f.tmdb}`, { language: 'en-US', append_to_response: 'credits,release_dates' }) : null);
-const films = upcoming.map((f, i) => film(f, details[i]));
+const fetchDetails = list => pool(list, 8, f => f.tmdb ? tmdb(`/movie/${f.tmdb}`, { language: 'en-US', append_to_response: 'credits,release_dates' }) : null);
+const upcomingDetails = await fetchDetails(upcoming);
+const films = upcoming.map((f, i) => film(f, upcomingDetails[i]));
+
+const day = offset => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
+const cutoff = day(-KEEP_PAST_DAYS), soon = day(7), oldest = day(-270);
+const previousFilms = readJson(OUT, { films: [] }).films;
+const previousDate = new Map(previousFilms.map(f => [f.fv, f.nl]));
+
+// Release date for a film that's already playing: the Filmvandaag date saved by an earlier run, else TMDB's
+// Dutch cinema date if it's from the last 9 months. Classics back in cinemas (no recent date) are left out.
+const nowDetails = await fetchDetails(nowShowing);
+const playing = nowShowing.map((f, i) => {
+  const nl = previousDate.get(f.fv) || theatrical(nowDetails[i] || {}, 'NL')?.date;
+  return nl && nl >= oldest && nl <= soon ? { ...film({ ...f, nl }, nowDetails[i]), nowShowing: true } : null;
+}).filter(Boolean);
 
 // Films drop off Filmvandaag's "coming soon" list once they open, and sometimes a few days before.
 // Keep them from the previous run for a while; films more than a week out that vanish were probably postponed.
-const day = offset => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
-const cutoff = day(-KEEP_PAST_DAYS), soon = day(7);
-const current = new Set(films.map(f => f.fv));
-const previous = readJson(OUT, { films: [] }).films.filter(f => !current.has(f.fv) && f.nl >= cutoff && f.nl <= soon);
+const current = new Set([...films, ...playing].map(f => f.fv));
+const previous = previousFilms.filter(f => !current.has(f.fv) && f.nl >= cutoff && f.nl <= soon);
 
-writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: [...previous, ...films] });
-console.log(`Wrote ${films.length + previous.length} films (${films.filter(f => f.tmdb).length} matched on TMDB, ${previous.length} kept from earlier)`);
+writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: [...previous, ...playing, ...films] });
+console.log(`Wrote ${films.length + playing.length + previous.length} films: ${films.length} upcoming, ${playing.length} now showing (of ${nowShowing.length}), ${previous.length} kept from earlier`);
