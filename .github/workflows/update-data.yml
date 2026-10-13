@@ -30,18 +30,22 @@ jobs:
         with:
           node-version: 22
 
+      # App changes (pushes) publish right away; data is fetched on the schedule or a manual run.
       - name: Fetch Dutch release dates and TMDB details
+        if: github.event_name != 'push'
         run: node scripts/build-data.mjs
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
 
-      - name: Fetch Pathé De Kuip showtimes
+      - name: Fetch Pathé showtimes
+        if: github.event_name != 'push'
         run: node scripts/build-showtimes.mjs
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
 
       # Save the data (and the Filmvandaag-to-TMDB matches) so past weeks and matches carry over between runs.
       - name: Commit updated data
+        if: github.event_name != 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
