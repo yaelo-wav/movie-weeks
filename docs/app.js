@@ -18,8 +18,7 @@ const state = {
   byWeek: new Map(),  // monday key -> films sorted by popularity
   generatedAt: null,
   watchlist: loadWatchlist(), // [{ fv, addedAt, film }]
-  showtimes: null,    // Pathé De Kuip screenings, from data/showtimes.json
-  maxGap: loadGap(),  // minutes allowed between film 1 ending and film 2 starting
+  showtimes: null,    // Pathé screenings per cinema, from data/showtimes.json
 };
 function viewFromHash() {
   return { '#watchlist': 'watchlist', '#doubles': 'doubles' }[location.hash] || 'releases';
@@ -149,12 +148,9 @@ function renderWatchlist() {
   hydrateButtons($('main'));
 }
 
-// ---------- shell ----------
 // ---------- double screenings ----------
 const LATE_ENTRY = 15; // minutes of trailers/ads after the listed start time
-function loadGap() {
-  try { return Number(localStorage.getItem('opening-weeks:gap')) || 30; } catch { return 30; }
-}
+const MAX_GAP = 30;    // longest break between film 1 ending and film 2 starting
 // "2026-10-16T11:30" as local time (avoids Safari's inconsistent parsing).
 const toDate = s => { const [d, t] = s.split('T'); const [y, m, dd] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number); return new Date(y, m - 1, dd, h, mi); };
 const hhmm = s => s.slice(11, 16);
@@ -164,7 +160,7 @@ const screenName = s => { const n = s.screen.match(/^\d+/)?.[0]; return n ? `Scr
 function watchlistShowings() {
   const now = new Date();
   return state.watchlist.map(i => filmFor(i.fv)).filter(Boolean).map(film => {
-    const shows = (state.showtimes?.films || []).filter(s => (film.tmdb && s.tmdb === film.tmdb) || s.fv === film.fv);
+    const shows = (currentCinema()?.films || []).filter(s => (film.tmdb && s.tmdb === film.tmdb) || s.fv === film.fv);
     const screenings = shows.flatMap(s => s.screenings).filter(s => toDate(s.start) > now);
     return { film, screenings };
   });
@@ -178,7 +174,7 @@ function findDoubles(showings) {
       // Negative gap: film 2's listed start is before film 1 ends. That's fine up to LATE_ENTRY minutes,
       // because Pathé's listed start time is when the trailers and ads begin.
       const gap = (toDate(s2.start) - toDate(s1.end)) / 60000;
-      if (gap >= -LATE_ENTRY && gap <= state.maxGap) pairs.push({ first: a.film, s1, second: b.film, s2, gap });
+      if (gap >= -LATE_ENTRY && gap <= MAX_GAP) pairs.push({ first: a.film, s1, second: b.film, s2, gap });
     }
   }
   return pairs.sort((x, y) => x.s1.start.localeCompare(y.s1.start) || x.gap - y.gap);
@@ -194,12 +190,12 @@ function slot(film, s) {
   </div>`;
 }
 
-// View options for the double screenings list. Day is per visit; the rest is remembered.
+// View options for the double screenings list. Day is per visit; cinema, time of day and sort are remembered.
 const DBL_KEY = 'opening-weeks:doubles';
 const dbl = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(DBL_KEY)) || {}; } catch {}
-  return { day: null, part: saved.part || 'all', sort: saved.sort || 'start' };
+  return { day: null, cinema: saved.cinema || 'pathe-de-kuip', part: saved.part || 'all', sort: saved.sort || 'start' };
 })();
 const PARTS = {
   all: { label: 'All day', test: () => true },
@@ -215,10 +211,19 @@ const SORTS = {
 const segButtons = (name, entries, current, label) =>
   `<div class="seg" role="group" aria-label="${label}">${entries.map(([v, text]) => `<button type="button" data-dbl="${name}:${v}" aria-pressed="${String(v) === String(current)}">${text}</button>`).join('')}</div>`;
 
+function cinemaList() {
+  const st = state.showtimes;
+  if (!st) return [];
+  // Older data files held a single cinema.
+  return st.cinemas || [{ ...(st.cinema || { slug: 'pathe-de-kuip', name: 'Pathé De Kuip' }), films: st.films || [] }];
+}
+function currentCinema() {
+  const list = cinemaList();
+  return list.find(c => c.slug === dbl.cinema) || list[0];
+}
+
 function renderDoubles() {
-  const head = `<div class="dbl-head"><h2>Double screenings</h2>
-    <p>Watchlist films back to back at Pathé De Kuip. Walking in up to ${LATE_ENTRY} minutes late counts: that's trailer time.</p></div>`;
-  const wrap = body => { $('main').innerHTML = `<div class="dbl">${head}${body}</div>`; };
+  const wrap = body => { $('main').innerHTML = `<div class="dbl"><div class="dbl-head"><h2>Double screenings</h2></div>${body}</div>`; };
 
   if (!state.showtimes) { wrap(state.showtimesError ? `<div class="empty"><p>Couldn't load the Pathé showtimes (${esc(state.showtimesError)}).</p></div>` : '<div class="skel" style="aspect-ratio:auto;height:160px"></div>'); return; }
   if (state.watchlist.length < 2) {
@@ -226,11 +231,15 @@ function renderDoubles() {
     $('toReleases').addEventListener('click', () => setView('releases'));
     return;
   }
+  const cinema = currentCinema();
+  const cinemaSelect = `<label>Cinema<select id="dblCinema">${cinemaList().map(c => `<option value="${c.slug}"${c.slug === cinema.slug ? ' selected' : ''}>${esc(c.name.replace(/^Pathé\s+/, ''))}</option>`).join('')}</select></label>`;
+  const sortSelect = `<label>Sort<select id="dblSort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${k === dbl.sort ? ' selected' : ''}>${v.label}</option>`).join('')}</select></label>`;
+
   const showings = watchlistShowings();
-  const chips = `<div class="playing">${showings.map(s => `<span class="${s.screenings.length ? '' : 'off'}">${esc(s.film.title)}${s.screenings.length ? ` · ${s.screenings.length}×` : ''}</span>`).join('')}</div>`;
   const playing = showings.filter(s => s.screenings.length).length;
   if (playing < 2) {
-    wrap(`${chips}<div class="empty"><p>${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at Pathé De Kuip right now, so there's nothing to combine yet.</p></div>`);
+    wrap(`<div class="dbl-ctl"><div class="selects">${cinemaSelect}</div></div>
+      <div class="empty"><p>${playing ? 'Only one film' : 'None of the films'} on your watchlist ${playing ? 'is' : 'are'} playing at ${esc(cinema.name)} right now, so there's nothing to combine yet.</p></div>`);
     return;
   }
 
@@ -241,17 +250,14 @@ function renderDoubles() {
   if (!byDay.has(dbl.day)) dbl.day = byDay.keys().next().value || null;
 
   const controls = `<div class="dbl-ctl">
-    <div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
-      <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>
+    <div class="selects">${cinemaSelect}${sortSelect}</div>
     ${segButtons('part', Object.entries(PARTS).map(([k, v]) => [k, v.label]), dbl.part, 'Time of day')}
-    <div class="selects">
-      <label>Sort<select id="dblSort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${k === dbl.sort ? ' selected' : ''}>${v.label}</option>`).join('')}</select></label>
-      <label>Max break<select id="dblGap">${[15, 30, 45, 60].map(m => `<option value="${m}"${m === state.maxGap ? ' selected' : ''}>${m} min</option>`).join('')}</select></label>
-    </div>
+    ${byDay.size ? `<div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
+      <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>` : ''}
   </div>`;
 
   if (!dbl.day) {
-    wrap(`${chips}${controls}<div class="empty"><p>No combinations ${dbl.part === 'all' ? '' : `in the ${PARTS[dbl.part].label.toLowerCase()} `}with a break of ${state.maxGap} minutes or less. Try another time of day or a longer break.</p></div>`);
+    wrap(`${controls}<div class="empty"><p>No double screenings ${dbl.part === 'all' ? '' : `in the ${PARTS[dbl.part].label.toLowerCase()} `}at ${esc(cinema.name)}.${dbl.part === 'all' ? '' : ' Try another time of day.'}</p></div>`);
     return;
   }
   const list = byDay.get(dbl.day).sort(SORTS[dbl.sort].cmp);
@@ -262,20 +268,16 @@ function renderDoubles() {
       <div class="gapline${p.gap < 0 ? ' late' : ''}">${p.gap > 0 ? `${p.gap} min break` : p.gap === 0 ? 'Starts right after'
         : `Walk in ${-p.gap} min late, during the trailers`}</div>
       ${slot(p.second, p.s2)}
-      <div class="total">${hhmm(p.s1.start)} – ${hhmm(p.s2.end)} at Pathé De Kuip</div>
+      <div class="total">${hhmm(p.s1.start)} – ${hhmm(p.s2.end)} at ${esc(cinema.name)}</div>
     </article>`).join('')}</div></section>`;
-  wrap(chips + controls + day);
+  wrap(controls + day);
   $('main').querySelector('.daychip[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
 function setDoubleOption(name, value) {
-  if (name === 'gap') {
-    state.maxGap = +value;
-    try { localStorage.setItem('opening-weeks:gap', state.maxGap); } catch {}
-  } else {
-    dbl[name] = value;
-    try { localStorage.setItem(DBL_KEY, JSON.stringify({ part: dbl.part, sort: dbl.sort })); } catch {}
-  }
+  dbl[name] = value;
+  if (name === 'cinema') dbl.day = null;
+  try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, part: dbl.part, sort: dbl.sort })); } catch {}
   renderDoubles();
 }
 document.addEventListener('click', e => {
@@ -284,7 +286,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'dblSort') setDoubleOption('sort', e.target.value);
-  if (e.target.id === 'dblGap') setDoubleOption('gap', e.target.value);
+  if (e.target.id === 'dblCinema') setDoubleOption('cinema', e.target.value);
 });
 
 function render() {

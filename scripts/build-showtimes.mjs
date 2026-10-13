@@ -1,5 +1,5 @@
-// Builds docs/data/showtimes.json: every screening at Pathé De Kuip (Rotterdam), matched to TMDB/Filmvandaag
-// films so the app can find double screenings on your watchlist. Run after build-data.mjs.
+// Builds docs/data/showtimes.json: every screening at Pathé De Kuip and Pathé Schouwburgplein (Rotterdam),
+// matched to TMDB/Filmvandaag films so the app can find double screenings on your watchlist. Run after build-data.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,10 @@ const OUT = path.join(ROOT, 'docs', 'data', 'showtimes.json');
 const RELEASES = path.join(ROOT, 'docs', 'data', 'releases.json');
 const MAP = path.join(ROOT, 'cache', 'pathe-map.json');
 const KEY = process.env.TMDB_API_KEY || readJson(path.join(ROOT, 'config.json'), {}).tmdbApiKey;
-const CINEMA = { slug: 'pathe-de-kuip', name: 'Pathé De Kuip' };
+const CINEMAS = [
+  { slug: 'pathe-de-kuip', name: 'Pathé De Kuip' },
+  { slug: 'pathe-schouwburgplein', name: 'Pathé Schouwburgplein' },
+];
 const PATHE = 'https://www.pathe.nl/api';
 const UA = 'OpeningWeeks/1.0 (personal release calendar)';
 const RECHECK_UNMATCHED = 20 * 3600e3;
@@ -63,6 +66,13 @@ async function match(show, releases) {
     const ok = res.find(r => (norm(r.title) === norm(query) || norm(r.original_title) === norm(query))
       && (!year || Math.abs(Number((r.release_date || '0').slice(0, 4)) - year) <= 1));
     if (ok) return { tmdb: ok.id, fv: null };
+    // Re-runs of classics (The Shining, Halloween) carry this year's date: confirm by director instead.
+    const directors = (show.directors || '').split(',').map(norm).filter(Boolean);
+    const sameTitle = res.filter(r => norm(r.title) === norm(clean) || norm(r.original_title) === norm(clean)).slice(0, 5);
+    for (const r of directors.length ? sameTitle : []) {
+      const crew = (await tmdb(`/movie/${r.id}/credits`)).crew || [];
+      if (crew.some(c => c.job === 'Director' && directors.includes(norm(c.name)))) return { tmdb: r.id, fv: null };
+    }
   }
   return { tmdb: null, fv: null };
 }
@@ -71,9 +81,12 @@ const FORMATS = { dolby: 'Dolby', '4dx': '4DX', imax: 'IMAX', screenx: 'ScreenX'
 
 // ---------- main ----------
 const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }); // YYYY-MM-DD
-const cinema = await getJson(`${PATHE}/cinema/${CINEMA.slug}/shows`);
-const slugs = Object.keys(cinema.shows || {});
-if (!slugs.length) throw new Error('Pathé returned no shows for De Kuip; the API may have changed');
+const programmes = {};
+for (const c of CINEMAS) {
+  programmes[c.slug] = (await getJson(`${PATHE}/cinema/${c.slug}/shows`)).shows || {};
+  if (!Object.keys(programmes[c.slug]).length) throw new Error(`Pathé returned no shows for ${c.name}; the API may have changed`);
+}
+const slugs = [...new Set(Object.values(programmes).flatMap(p => Object.keys(p)))];
 
 const releases = readJson(RELEASES, { films: [] }).films;
 const map = readJson(MAP, {});
@@ -90,19 +103,20 @@ for (const slug of slugs) {
 for (const m of Object.values(map)) if (m.tmdb && !m.fv) m.fv = releases.find(f => f.tmdb === m.tmdb)?.fv || null;
 writeJson(MAP, map);
 
-// One request per film per day it plays.
-const jobs = slugs.filter(s => map[s]?.tmdb || map[s]?.fv)
-  .flatMap(slug => Object.keys(cinema.shows[slug].days || {}).filter(d => d >= today).map(day => ({ slug, day })));
-const results = await pool(jobs, 4, j => getJson(`${PATHE}/show/${j.slug}/showtimes/${CINEMA.slug}/${j.day}`));
+// One request per film, per cinema, per day it plays there.
+const jobs = CINEMAS.flatMap(c => Object.entries(programmes[c.slug])
+  .filter(([slug]) => map[slug]?.tmdb || map[slug]?.fv)
+  .flatMap(([slug, show]) => Object.keys(show.days || {}).filter(d => d >= today).map(day => ({ cinema: c.slug, slug, day }))));
+const results = await pool(jobs, 4, j => getJson(`${PATHE}/show/${j.slug}/showtimes/${j.cinema}/${j.day}`));
 
-const films = new Map();
+const films = Object.fromEntries(CINEMAS.map(c => [c.slug, new Map()]));
 jobs.forEach((j, i) => {
   const list = Array.isArray(results[i]) ? results[i] : [];
-  const m = map[j.slug];
-  if (!films.has(j.slug)) films.set(j.slug, { slug: j.slug, title: m.title, tmdb: m.tmdb, fv: m.fv, screenings: [] });
+  const m = map[j.slug], byFilm = films[j.cinema];
+  if (!byFilm.has(j.slug)) byFilm.set(j.slug, { slug: j.slug, title: m.title, tmdb: m.tmdb, fv: m.fv, screenings: [] });
   for (const s of list) {
-    if (s.isMovie === false || !s.time || !s.endTime) continue;
-    films.get(j.slug).screenings.push({
+    if (!s.time || !s.endTime) continue;
+    byFilm.get(j.slug).screenings.push({
       start: s.time.slice(0, 16).replace(' ', 'T'),
       end: s.endTime.slice(0, 16).replace(' ', 'T'),
       screen: (s.auditoriumName || '').replace(/\s+/g, ' ').trim(),
@@ -113,8 +127,13 @@ jobs.forEach((j, i) => {
     });
   }
 });
-const out = [...films.values()].filter(f => f.screenings.length).map(f => ({ ...f, screenings: f.screenings.sort((a, b) => a.start.localeCompare(b.start)) }));
-writeJson(OUT, { generatedAt: new Date().toISOString(), cinema: CINEMA, films: out });
-console.log(`${CINEMA.name}: ${out.length} films, ${out.reduce((n, f) => n + f.screenings.length, 0)} screenings (${jobs.length} requests)`);
+const cinemas = CINEMAS.map(c => {
+  const list = [...films[c.slug].values()].filter(f => f.screenings.length)
+    .map(f => ({ ...f, screenings: f.screenings.sort((a, b) => a.start.localeCompare(b.start)) }));
+  console.log(`${c.name}: ${list.length} films, ${list.reduce((n, f) => n + f.screenings.length, 0)} screenings`);
+  return { ...c, films: list };
+});
+writeJson(OUT, { generatedAt: new Date().toISOString(), cinemas });
+console.log(`${jobs.length} showtime requests`);
 const unmatched = slugs.filter(s => !map[s]?.tmdb && !map[s]?.fv);
 if (unmatched.length) console.log(`Not matched (skipped): ${unmatched.join(', ')}`);

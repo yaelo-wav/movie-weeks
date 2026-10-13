@@ -131,9 +131,9 @@ button { font: inherit; color: inherit; }
 .selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .selects label { display: grid; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .selects select {
-  appearance: none; -webkit-appearance: none; width: 100%; font: 600 15px/1.2 var(--font-body); color: var(--fg);
-  background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2379a2ff' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center / 16px;
-  border: 1px solid var(--line); border-radius: 10px; padding: 9px 32px 9px 12px; text-transform: none; letter-spacing: 0;
+  appearance: none; -webkit-appearance: none; width: 100%; font: 600 14px/1.2 var(--font-body); color: var(--fg);
+  background: var(--raised) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2379a2ff' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 28px 9px 10px; text-transform: none; letter-spacing: 0;
 }
 .playing { display: flex; flex-wrap: wrap; gap: 6px; }
 .playing span { font-size: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 10px; }
@@ -241,7 +241,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .78); backdrop-filter: blur(4px); }
   <div class="status" id="status">Loading release dates…</div>
 
   <footer>
-    <span>Dutch cinema dates from <a href="https://www.filmvandaag.nl/nieuwefilms" target="_blank" rel="noopener">Filmvandaag</a>. Showtimes from <a href="https://www.pathe.nl/nl/bioscopen/pathe-de-kuip" target="_blank" rel="noopener">Pathé De Kuip</a>. Posters, cast and US dates from <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>.</span>
+    <span>Dutch cinema dates from <a href="https://www.filmvandaag.nl/nieuwefilms" target="_blank" rel="noopener">Filmvandaag</a>. Showtimes from <a href="https://www.pathe.nl" target="_blank" rel="noopener">Pathé</a>. Posters, cast and US dates from <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>.</span>
     <span>This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
   </footer>
 </div>
