@@ -1,6 +1,6 @@
 // Opening Weeks service worker: network-first, so you always get the newest release data when online,
 // and the last loaded version (plus posters you've seen) when offline.
-const CACHE = 'opening-weeks-v2';
+const CACHE = 'opening-weeks-v3';
 const IMAGES = 'opening-weeks-img-v1';
 const SHELL = ['./', 'app.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'data/releases.json'];
 
@@ -36,7 +36,8 @@ self.addEventListener('fetch', e => {
   if (url.origin !== location.origin) return;
   const cacheKey = url.pathname.endsWith('/data/releases.json') ? new Request(new URL('data/releases.json', self.registration.scope)) : e.request;
   e.respondWith(
-    fetch(e.request)
+    // 'no-cache' makes the phone check GitHub for a newer file instead of reusing its HTTP cache (up to 10 min).
+    fetch(e.request, { cache: 'no-cache' })
       .then(res => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(cacheKey, copy)); }
         return res;
