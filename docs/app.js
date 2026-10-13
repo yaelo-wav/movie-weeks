@@ -186,19 +186,13 @@ function pushAccount() {
 function applyAccountDoc(doc, uid) {
   if (pushTimer) return; // a newer change from this device is on its way
   doc = doc || {};
-  const first = (() => { try { return localStorage.getItem(MERGED_KEY) !== uid; } catch { return true; } })();
-  let wl = (doc.watchlist || []).map(i => ({ fv: i.fv, addedAt: i.addedAt, film: state.films?.get(i.fv) || i.film }));
+  // The account is the only source: nothing saved on the phone is merged in. MERGED_KEY remembers whose copy
+  // this device holds, so it can show it while the login is still loading (e.g. offline).
+  try { localStorage.setItem(MERGED_KEY, uid); } catch {}
+  const wl = (doc.watchlist || []).map(i => ({ fv: i.fv, addedAt: i.addedAt, film: state.films?.get(i.fv) || i.film }));
   const watched = new Set(doc.watched || []);
   const lbs = { imported: [], dismissed: [], unwatched: [], ...(doc.lbSync || {}) };
-  let lbUser = doc.lbUser || '';
-  if (first) {
-    // First sign-in on this device: keep what was already saved here.
-    for (const i of state.watchlist) if (!wl.some(x => x.fv === i.fv)) wl.push(i);
-    state.watched.forEach(fv => watched.add(fv));
-    for (const k of ['imported', 'dismissed', 'unwatched']) lbs[k] = [...new Set([...lbs[k], ...lbSync[k]])];
-    if (!lbUser && lbSync.imported.length && state.lbData) lbUser = state.lbData.user; // this device synced Letterboxd
-    try { localStorage.setItem(MERGED_KEY, uid); } catch {}
-  }
+  const lbUser = doc.lbUser || '';
   state.account = { uid, name: doc.name || '', username: doc.username || '', lbUser, friends: doc.friends || [] };
   state.watched = watched;
   state.watchlist = wl.filter(i => !watched.has(i.fv));
@@ -208,7 +202,6 @@ function applyAccountDoc(doc, uid) {
     localStorage.setItem(WATCHED_KEY, JSON.stringify([...state.watched]));
     localStorage.setItem(LB_SYNC_KEY, JSON.stringify(lbSync));
   } catch {}
-  if (first) { if (lbUser !== (doc.lbUser || '')) cloud.call('saveMe', { lbUser }).catch(() => {}); pushAccount(); }
   // Sync Letterboxd once per account + linked profile (again when the profile changes).
   const lbKey = `${uid}:${lbUser}`;
   if (state.lbData && lbAppliedFor !== lbKey) { lbAppliedFor = lbKey; applyLetterboxd(state.lbData); }
@@ -261,14 +254,12 @@ function startAccounts() {
       friendKey = ''; lbAppliedFor = null; groupMigrated = false;
       state.members = []; state.requests = { incoming: [], outgoing: [] }; state.requestsLoaded = false; searchResults = []; confirmRemove = null;
       if (!user) {
-        // Logged out: the films live in the account, so clear this device's copy (so the next person who logs
-        // in here doesn't get them merged into their account).
-        if (state.account) {
-          state.watchlist = []; state.watched = new Set();
-          Object.assign(lbSync, { imported: [], dismissed: [], unwatched: [] });
-          try { [WL_KEY, WATCHED_KEY, LB_SYNC_KEY, MERGED_KEY, 'opening-weeks:letterboxd-device'].forEach(k => localStorage.removeItem(k)); } catch {}
-          updateCount();
-        }
+        // Logged out (or the account no longer exists): the films live in the account, so always clear any copy
+        // still saved on this device.
+        state.watchlist = []; state.watched = new Set();
+        Object.assign(lbSync, { imported: [], dismissed: [], unwatched: [] });
+        try { [WL_KEY, WATCHED_KEY, LB_SYNC_KEY, MERGED_KEY, 'opening-weeks:letterboxd-device'].forEach(k => localStorage.removeItem(k)); } catch {}
+        updateCount();
         state.account = null;
         if (state.lbData) applyLetterboxd(state.lbData);
         updateAccountButton(); render(); renderAccountSheet();
