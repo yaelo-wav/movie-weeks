@@ -110,6 +110,7 @@ function film(f, m) {
   return {
     ...base,
     tmdb: m.id,
+    lang: m.original_language || null,
     altTitle: m.title !== f.title ? m.title : undefined,
     year: f.year || Number((m.release_date || '').slice(0, 4)) || null,
     us: us?.date || null,
@@ -161,5 +162,9 @@ const playing = nowShowing.map((f, i) => {
 const current = new Set([...films, ...playing].map(f => f.fv));
 const previous = previousFilms.filter(f => !current.has(f.fv) && f.nl >= cutoff && f.nl <= soon);
 
-writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: [...previous, ...playing, ...films] });
-console.log(`Wrote ${films.length + playing.length + previous.length} films: ${films.length} upcoming, ${playing.length} now showing (of ${nowShowing.length}), ${previous.length} kept from earlier`);
+// Leave out Dutch-language films. Films TMDB doesn't know are small Dutch releases too.
+const wanted = f => f.tmdb && f.lang !== 'nl';
+const all = [...previous, ...playing, ...films];
+const out = all.filter(wanted);
+writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: out });
+console.log(`Wrote ${out.length} films: ${films.filter(wanted).length} upcoming, ${playing.filter(wanted).length} now showing, ${previous.filter(wanted).length} kept from earlier (${all.length - out.length} Dutch or unmatched left out)`);

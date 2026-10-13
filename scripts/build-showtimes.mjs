@@ -115,7 +115,8 @@ jobs.forEach((j, i) => {
   const m = map[j.slug], byFilm = films[j.cinema];
   if (!byFilm.has(j.slug)) byFilm.set(j.slug, { slug: j.slug, title: m.title, tmdb: m.tmdb, fv: m.fv, screenings: [] });
   for (const s of list) {
-    if (!s.time || !s.endTime) continue;
+    // Skip Dutch-language screenings (Dutch films and Dutch-dubbed versions).
+    if (!s.time || !s.endTime || s.version === 'nlnl') continue;
     byFilm.get(j.slug).screenings.push({
       start: s.time.slice(0, 16).replace(' ', 'T'),
       end: s.endTime.slice(0, 16).replace(' ', 'T'),

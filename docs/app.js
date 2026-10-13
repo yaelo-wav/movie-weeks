@@ -197,7 +197,8 @@ const dbl = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(DBL_KEY)) || {}; } catch {}
   return {
-    day: null, cinema: saved.cinema || 'pathe-de-kuip', sort: saved.sort || 'start',
+    day: null, film: '', // film that must be part of the pair ('' = any); per visit
+    cinema: saved.cinema || 'pathe-de-kuip', sort: saved.sort || 'start',
     from: saved.from ?? '', until: saved.until ?? '', // earliest start / latest end, in minutes after midnight ('' = any)
     exclude: Array.isArray(saved.exclude) ? saved.exclude : [], // special formats (Dolby, IMAX, 4DX…) to leave out
   };
@@ -256,13 +257,18 @@ function renderDoubles() {
   }
 
   // Keep pairs inside the chosen start/end window, then group by day.
-  const pairs = findDoubles(showings).filter(inWindow);
+  const options = showings.filter(s => s.screenings.length).map(s => s.film).sort((a, b) => a.title.localeCompare(b.title));
+  if (!options.some(f => String(f.fv) === dbl.film)) dbl.film = '';
+  const filmSelect = `<label class="wide">Must include<select id="dblFilm"><option value="">Any film</option>${options.map(f =>
+    `<option value="${f.fv}"${String(f.fv) === dbl.film ? ' selected' : ''}>${esc(f.title)}</option>`).join('')}</select></label>`;
+  const pairs = findDoubles(showings).filter(inWindow)
+    .filter(p => !dbl.film || String(p.first.fv) === dbl.film || String(p.second.fv) === dbl.film);
   const byDay = new Map();
   pairs.forEach(p => { const d = p.s1.start.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(p); });
   if (!byDay.has(dbl.day)) dbl.day = byDay.keys().next().value || null;
 
   const controls = `<div class="dbl-ctl">
-    <div class="selects">${cinemaSelect}${sortSelect}${fromSelect}${untilSelect}</div>
+    <div class="selects">${cinemaSelect}${sortSelect}${fromSelect}${untilSelect}${filmSelect}</div>
     ${formatChips(cinema)}
     ${byDay.size ? `<div class="days-strip" role="group" aria-label="Day">${[...byDay].map(([d, list]) => `<button type="button" class="daychip" data-dbl="day:${d}" aria-pressed="${d === dbl.day}">
       <span>${esc(fmt(parseDay(d), { weekday: 'short' }))}</span><b>${parseDay(d).getDate()}</b><small>${esc(fmt(parseDay(d), { month: 'short' }))} · ${list.length}</small></button>`).join('')}</div>` : ''}
@@ -298,7 +304,7 @@ function formatChips(cinema) {
 function setDoubleOption(name, value) {
   if (name === 'fmt') dbl.exclude = dbl.exclude.includes(value) ? dbl.exclude.filter(f => f !== value) : [...dbl.exclude, value];
   else dbl[name] = value;
-  if (name === 'cinema') dbl.day = null;
+  if (name === 'cinema' || name === 'film') dbl.day = null;
   try { localStorage.setItem(DBL_KEY, JSON.stringify({ cinema: dbl.cinema, sort: dbl.sort, from: dbl.from, until: dbl.until, exclude: dbl.exclude })); } catch {}
   renderDoubles();
 }
@@ -311,6 +317,7 @@ document.addEventListener('change', e => {
   if (e.target.id === 'dblCinema') setDoubleOption('cinema', e.target.value);
   if (e.target.id === 'dblFrom') setDoubleOption('from', e.target.value);
   if (e.target.id === 'dblUntil') setDoubleOption('until', e.target.value);
+  if (e.target.id === 'dblFilm') setDoubleOption('film', e.target.value);
 });
 
 function render() {
