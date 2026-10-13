@@ -128,11 +128,24 @@ jobs.forEach((j, i) => {
     });
   }
 });
+// Last day of the fully published programme. Pathé publishes a whole week (to Wednesday) on Monday evening;
+// after that only a few advance-sale films are listed. A film whose last screening is before this day is leaving.
+function publishedUntil(programme) {
+  const perDay = {};
+  for (const show of Object.values(programme)) for (const d of Object.keys(show.days || {})) if (d >= today) perDay[d] = (perDay[d] || 0) + 1;
+  const days = Object.keys(perDay).sort();
+  const typical = days.slice(0, 3).map(d => perDay[d]).sort((a, b) => a - b)[1] || 0;
+  let last = null;
+  for (const d of days) { if (perDay[d] >= typical / 2) last = d; else break; }
+  return last;
+}
+
 const cinemas = CINEMAS.map(c => {
   const list = [...films[c.slug].values()].filter(f => f.screenings.length)
     .map(f => ({ ...f, screenings: f.screenings.sort((a, b) => a.start.localeCompare(b.start)) }));
-  console.log(`${c.name}: ${list.length} films, ${list.reduce((n, f) => n + f.screenings.length, 0)} screenings`);
-  return { ...c, films: list };
+  const until = publishedUntil(programmes[c.slug]);
+  console.log(`${c.name}: ${list.length} films, ${list.reduce((n, f) => n + f.screenings.length, 0)} screenings, full programme until ${until}`);
+  return { ...c, publishedUntil: until, films: list };
 });
 writeJson(OUT, { generatedAt: new Date().toISOString(), cinemas });
 console.log(`${jobs.length} showtime requests`);

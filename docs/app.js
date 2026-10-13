@@ -8,6 +8,7 @@ const ICON = {
   add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
 
 const state = {
@@ -18,6 +19,7 @@ const state = {
   byWeek: new Map(),  // monday key -> films sorted by popularity
   generatedAt: null,
   watchlist: loadWatchlist(), // [{ fv, addedAt, film }]
+  watched: loadWatched(),     // Set of fv ids marked as watched (shown with an eye icon)
   showtimes: null,    // Pathé screenings per cinema, from data/showtimes.json
 };
 function viewFromHash() {
@@ -73,6 +75,29 @@ function updateSaveButton(b) {
   if (b.classList.contains('add')) b.innerHTML = `${saved ? ICON.check : ICON.add}<span>${saved ? 'On your watchlist' : 'Add to watchlist'}</span>`;
   else { b.innerHTML = saved ? ICON.check : ICON.add; b.setAttribute('aria-label', `${saved ? 'Remove from' : 'Add to'} watchlist: ${title}`); }
 }
+// ---------- watched (this device only) ----------
+const WATCHED_KEY = 'opening-weeks:watched';
+function loadWatched() {
+  try { return new Set(JSON.parse(localStorage.getItem(WATCHED_KEY)) || []); } catch { return new Set(); }
+}
+// Marking a film as watched also takes it off the watchlist.
+function toggleWatched(fv) {
+  if (state.watched.has(fv)) state.watched.delete(fv);
+  else {
+    state.watched.add(fv);
+    if (onList(fv)) { state.watchlist = state.watchlist.filter(i => i.fv !== fv); saveWatchlist(); updateCount(); }
+  }
+  try { localStorage.setItem(WATCHED_KEY, JSON.stringify([...state.watched])); } catch {}
+  render();
+  const d = $('detail');
+  if (d.open) { d.querySelectorAll('[data-save]').forEach(updateSaveButton); d.querySelectorAll('[data-watched]').forEach(updateWatchedButton); }
+}
+function updateWatchedButton(b) {
+  const seen = state.watched.has(+b.dataset.watched);
+  b.setAttribute('aria-pressed', seen);
+  b.innerHTML = `${ICON.eye}<span>${seen ? 'Watched' : 'Mark as watched'}</span>`;
+}
+
 function updateCount() {
   const n = state.watchlist.length;
   $('wlCount').hidden = !n;
@@ -84,13 +109,17 @@ function datesLine(f) {
   const parts = [`<span class="nl">NL ${esc(short(f.nl))}</span>`];
   if (isRerelease(f)) parts.push(`<span class="badge">Re-release · ${f.year}</span>`);
   else if (f.us) parts.push(`<span>US ${esc(fmt(parseDay(f.us), { day: 'numeric', month: 'short' }))}</span>`);
+  const last = lastChance(f);
+  if (last) parts.push(`<span class="last">Last chance · until ${esc(short(last))}</span>`);
   return `<div class="dates">${parts.join('')}</div>`;
 }
+const lbBadge = f => f.lb?.rating ? `<span class="lbscore" aria-label="Letterboxd ${f.lb.rating.toFixed(1)} out of 5"><i></i><i></i><i></i>${f.lb.rating.toFixed(1)}</span>` : '';
 function card(f, rank) {
+  const seen = state.watched.has(f.fv);
   return `<article class="card">
     <button class="save" type="button" data-save="${f.fv}"></button>
-    <button class="open" type="button" data-open="${f.fv}" aria-label="${esc(f.title)}: details">
-      <div class="poster">${f.poster ? `<img src="${IMG}w500${f.poster}" alt="" loading="lazy">` : esc(f.title)}${rank ? `<span class="rank">${rank}</span>` : ''}</div>
+    <button class="open" type="button" data-open="${f.fv}" aria-label="${esc(f.title)}: details${seen ? ' (watched)' : ''}">
+      <div class="poster">${f.poster ? `<img src="${IMG}w500${f.poster}" alt="" loading="lazy">` : esc(f.title)}${rank ? `<span class="rank">${rank}</span>` : ''}${seen ? `<span class="seen" title="Watched">${ICON.eye}</span>` : ''}${lbBadge(f)}</div>
       <h3>${esc(f.title)}</h3>
     </button>
     ${datesLine(f)}
@@ -226,6 +255,32 @@ function cinemaList() {
   // Older data files held a single cinema.
   return st.cinemas || [{ ...(st.cinema || { slug: 'pathe-de-kuip', name: 'Pathé De Kuip' }), films: st.films || [] }];
 }
+// All screenings of a film per cinema it plays at: [{ cinema, screenings }]
+function filmRuns(f) {
+  return cinemaList().map(cinema => ({
+    cinema,
+    screenings: cinema.films.filter(s => (f.tmdb && s.tmdb === f.tmdb) || s.fv === f.fv)
+      .flatMap(s => s.screenings).sort((a, b) => a.start.localeCompare(b.start)),
+  })).filter(r => r.screenings.length);
+}
+
+// Last-chance date, only when we're sure: at every cinema showing the film, its last screening falls before the
+// last day of the fully published programme (so it's really not on later days that are already out), and it
+// played at least 3 days that week (so a once-a-week repertory screening isn't flagged). Otherwise null.
+function lastChance(f) {
+  const runs = filmRuns(f);
+  if (!runs.length) return null;
+  let last = null;
+  for (const { cinema, screenings } of runs) {
+    const until = cinema.publishedUntil;
+    const days = new Set(screenings.map(s => s.start.slice(0, 10)));
+    const end = screenings[screenings.length - 1];
+    if (!until || days.size < 3 || end.start.slice(0, 10) >= until) return null;
+    if (!last || end.start > last) last = end.start;
+  }
+  return last && toDate(last) > new Date() ? last.slice(0, 10) : null;
+}
+
 function currentCinema() {
   const list = cinemaList();
   return list.find(c => c.slug === dbl.cinema) || list[0];
@@ -350,11 +405,40 @@ function person(p, role) {
   const face = p.profile ? `style="background-image:url('${IMG}w185${p.profile}')"` : '';
   return `<div class="person"><div class="face" ${face}>${p.profile ? '' : esc(initials(p.name))}</div><div><b>${esc(p.name)}</b>${role ? `<span>${esc(role)}</span>` : ''}</div></div>`;
 }
+// Showtimes block in the film sheet, for one cinema at a time.
+function showtimesSection(f, slug) {
+  const runs = filmRuns(f);
+  if (!runs.length) return '';
+  const run = runs.find(r => r.cinema.slug === slug) || runs.find(r => r.cinema.slug === dbl.cinema) || runs[0];
+  const now = new Date();
+  const upcoming = run.screenings.filter(s => toDate(s.start) > now);
+  const byDay = new Map();
+  upcoming.forEach(s => { const d = s.start.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(s); });
+  const tabs = runs.length > 1 ? `<div class="seg" role="group" aria-label="Cinema">${runs.map(r =>
+    `<button type="button" data-showcinema="${r.cinema.slug}" aria-pressed="${r === run}">${esc(r.cinema.name.replace(/^Pathé\s+/, ''))}</button>`).join('')}</div>` : `<span class="where">${esc(run.cinema.name)}</span>`;
+  const last = lastChance(f);
+  const rows = [...byDay].map(([d, list]) => `<div class="tday"><b>${esc(fmt(parseDay(d), { weekday: 'short', day: 'numeric', month: 'short' }))}</b><div class="tlist">${list.map(s => {
+    const extra = [...s.formats, s.version !== 'OV' ? s.version : ''].filter(Boolean).join(' · ');
+    const inner = `${hhmm(s.start)}${extra ? `<small>${esc(extra)}</small>` : ''}`;
+    return s.book && !s.soldOut ? `<a class="tchip" href="${esc(s.book)}" target="_blank" rel="noopener">${inner}</a>` : `<span class="tchip off">${inner}${s.soldOut ? '<small>Sold out</small>' : ''}</span>`;
+  }).join('')}</div></div>`).join('');
+  return `<section id="dShowtimes" data-fv="${f.fv}"><div class="sthead"><h4>Showtimes</h4>${tabs}</div>
+    ${last ? `<p class="lastnote">Last chance: final screening on ${esc(fmt(parseDay(last), { weekday: 'long', day: 'numeric', month: 'long' }))}.</p>` : ''}
+    ${rows || '<p class="alt">No more screenings this week.</p>'}</section>`;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-showcinema]');
+  if (!b) return;
+  const sec = $('dShowtimes');
+  sec.outerHTML = showtimesSection(filmFor(+sec.dataset.fv), b.dataset.showcinema);
+});
+
 function openDetail(fv) {
   const f = filmFor(fv);
   if (!f) return;
   const d = $('detail');
   const facts = [f.cert, f.runtime ? `${Math.floor(f.runtime / 60)}h ${f.runtime % 60}m` : '', ...(f.genres || [])].filter(Boolean);
+  const lbLink = f.lb?.slug ? `<a class="lblink" href="https://letterboxd.com/film/${esc(f.lb.slug)}/" target="_blank" rel="noopener"><i></i><i></i><i></i>${f.lb.rating ? `${f.lb.rating.toFixed(2)} <small>/ 5</small>` : 'Letterboxd'}</a>` : '';
   const second = isRerelease(f)
     ? `<div><div class="lbl">Original release</div><div class="val">${f.year}</div><div class="note">Back in Dutch cinemas</div></div>`
     : `<div><div class="lbl">US release</div><div class="val">${f.us ? esc(fmt(parseDay(f.us))) : 'Not announced'}</div><div class="note">${f.us ? 'In US cinemas' : 'No US date on TMDB'}</div></div>`;
@@ -368,14 +452,18 @@ function openDetail(fv) {
         <h2 id="dTitle">${esc(f.title)}</h2>
         ${f.altTitle ? `<p class="alt">${esc(f.altTitle)}${f.year ? ` · ${f.year}` : ''}</p>` : f.year ? `<p class="alt">${f.year}</p>` : ''}
         ${f.tagline ? `<p class="tagline">${esc(f.tagline)}</p>` : ''}
-        ${facts.length ? `<div class="facts">${facts.map(x => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
-        <button class="btn primary add" type="button" data-save="${f.fv}"></button>
+        ${facts.length || lbLink ? `<div class="facts">${lbLink}${facts.map(x => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
+        <div class="actions">
+          <button class="btn primary add" type="button" data-save="${f.fv}"></button>
+          <button class="btn watched" type="button" data-watched="${f.fv}"></button>
+        </div>
       </div>
       <div class="body">
         <div class="rel">
           <div class="nl"><div class="lbl">In Dutch cinemas</div><div class="val">${esc(fmt(parseDay(f.nl), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</div><div class="note">${esc(weekTitle(mondayOf(parseDay(f.nl))).replace(/<[^>]+>/g, ''))}</div></div>
           ${second}
         </div>
+        ${showtimesSection(f)}
         <section><h4>Synopsis</h4><p>${esc(f.overview || 'No synopsis available yet.')}</p></section>
         <section><h4>Director${(f.directors || []).length === 1 ? '' : 's'}</h4>
           ${(f.directors || []).length ? `<div class="people">${f.directors.map(p => person(p, '')).join('')}</div>` : '<p class="alt">Not listed yet.</p>'}</section>
@@ -387,6 +475,7 @@ function openDetail(fv) {
       </div>
     </div>`;
   updateSaveButton(d.querySelector('.add'));
+  updateWatchedButton(d.querySelector('[data-watched]'));
   d.querySelector('.close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
   d.scrollTop = 0;
@@ -394,9 +483,10 @@ function openDetail(fv) {
 
 // ---------- events ----------
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-save], [data-open]');
+  const t = e.target.closest('[data-save], [data-open], [data-watched]');
   if (!t) return;
   if (t.dataset.save) toggleSave(+t.dataset.save);
+  else if (t.dataset.watched) toggleWatched(+t.dataset.watched);
   else openDetail(+t.dataset.open);
 });
 $('detail').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });

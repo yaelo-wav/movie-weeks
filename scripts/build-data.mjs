@@ -166,5 +166,28 @@ const previous = previousFilms.filter(f => !current.has(f.fv) && f.nl >= cutoff 
 const wanted = f => f.tmdb && f.lang !== 'nl';
 const all = [...previous, ...playing, ...films];
 const out = all.filter(wanted);
+
+// Letterboxd average rating for films that are already out (in NL or the US). Letterboxd has no API, so read
+// the rating from the film page (found via /tmdb/<id>/), politely and only once per weekly run.
+const LB_CACHE = path.join(ROOT, 'cache', 'letterboxd.json');
+const lb = readJson(LB_CACHE, {});
+const todayStr = day(0);
+const released = out.filter(f => f.nl <= todayStr || (f.us && f.us <= todayStr));
+let lbOk = 0, lbFail = 0;
+for (const f of released) {
+  try {
+    const r = await fetch(`https://letterboxd.com/tmdb/${f.tmdb}/`, { headers: { 'User-Agent': UA }, redirect: 'follow' });
+    if (!r.ok) throw new Error(`Letterboxd ${r.status}`);
+    const html = await r.text();
+    const rating = Number(html.match(/"ratingValue":\s*([\d.]+)/)?.[1]) || null;
+    const slug = new URL(r.url).pathname.match(/\/film\/([^/]+)/)?.[1] || null;
+    lb[f.tmdb] = { rating, slug, checkedAt: Date.now() };
+    lbOk++;
+  } catch (e) { lbFail++; } // keep the previous rating if this run can't reach Letterboxd
+  await sleep(700);
+}
+writeJson(LB_CACHE, lb);
+for (const f of out) if (lb[f.tmdb]?.slug) f.lb = { rating: lb[f.tmdb].rating, slug: lb[f.tmdb].slug };
+console.log(`Letterboxd: ${lbOk} checked, ${lbFail} failed, ${out.filter(f => f.lb?.rating).length} films with a rating`);
 writeJson(OUT, { generatedAt: new Date().toISOString(), source: 'filmvandaag.nl + TMDB', films: out });
 console.log(`Wrote ${out.length} films: ${films.filter(wanted).length} upcoming, ${playing.filter(wanted).length} now showing, ${previous.filter(wanted).length} kept from earlier (${all.length - out.length} Dutch or unmatched left out)`);
