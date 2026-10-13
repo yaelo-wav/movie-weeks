@@ -8,7 +8,8 @@ Films opening in Dutch cinemas, week by week, with a personal watchlist. Runs as
   *Double screenings* tab: pairs of watchlist films where the second starts at most 30 minutes after the first ends
   (or up to 15 minutes before, since the listed start time includes trailers).
 - A GitHub Action rebuilds `docs/data/releases.json` and `docs/data/showtimes.json` every Monday evening (after Pathé publishes the new week at 18:00) and republishes the site.
-- Your watchlist is stored on your phone (no account, no server).
+- Your watchlist is stored on your phone (no account, no server). It syncs daily with the public Letterboxd profile
+  `yaelooo`: watchlist films are added, logged films are marked watched (set `LETTERBOXD_USER` in the workflow to change it).
 
 ## One-time setup
 

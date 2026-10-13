@@ -61,7 +61,11 @@ function saveWatchlist() {
   try { localStorage.setItem(WL_KEY, JSON.stringify(state.watchlist)); } catch {}
 }
 function toggleSave(fv) {
-  if (onList(fv)) state.watchlist = state.watchlist.filter(i => i.fv !== fv);
+  if (onList(fv)) {
+    state.watchlist = state.watchlist.filter(i => i.fv !== fv);
+    // Removed in the app while it's on your Letterboxd watchlist: don't add it back on the next sync.
+    if (lbSync.imported.includes(fv)) { lbSync.imported = lbSync.imported.filter(x => x !== fv); lbSync.dismissed.push(fv); saveLbSync(); }
+  }
   else state.watchlist.push({ fv, addedAt: new Date().toISOString(), film: filmFor(fv) });
   saveWatchlist();
   updateCount();
@@ -83,7 +87,11 @@ function loadWatched() {
 }
 // Marking a film as watched also takes it off the watchlist.
 function toggleWatched(fv) {
-  if (state.watched.has(fv)) state.watched.delete(fv);
+  if (state.watched.has(fv)) {
+    state.watched.delete(fv);
+    // Un-marked in the app: don't let the Letterboxd diary mark it again.
+    if (!lbSync.unwatched.includes(fv)) { lbSync.unwatched.push(fv); saveLbSync(); }
+  }
   else {
     state.watched.add(fv);
     if (onList(fv)) { state.watchlist = state.watchlist.filter(i => i.fv !== fv); saveWatchlist(); updateCount(); }
@@ -93,6 +101,47 @@ function toggleWatched(fv) {
   const d = $('detail');
   if (d.open) { d.querySelectorAll('[data-save]').forEach(updateSaveButton); d.querySelectorAll('[data-watched]').forEach(updateWatchedButton); }
 }
+// ---------- Letterboxd sync ----------
+// data/letterboxd.json (built by a GitHub Action) lists the TMDB ids on your Letterboxd watchlist and in your
+// recent diary. Films from the watchlist are added here; logged films are marked watched. Your own changes in
+// the app win: removing an imported film or un-marking a logged one sticks.
+const LB_SYNC_KEY = 'opening-weeks:letterboxd-sync';
+const lbSync = (() => {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(LB_SYNC_KEY)) || {}; } catch {}
+  return { imported: s.imported || [], dismissed: s.dismissed || [], unwatched: s.unwatched || [] };
+})();
+function saveLbSync() { try { localStorage.setItem(LB_SYNC_KEY, JSON.stringify(lbSync)); } catch {} }
+
+function applyLetterboxd(lb) {
+  const byTmdb = new Map([...state.films.values()].filter(f => f.tmdb).map(f => [f.tmdb, f]));
+  const onLbList = new Set(lb.watchlist);
+  for (const id of lb.watched) {
+    const f = byTmdb.get(id);
+    if (!f || state.watched.has(f.fv) || lbSync.unwatched.includes(f.fv)) continue;
+    state.watched.add(f.fv);
+    state.watchlist = state.watchlist.filter(i => i.fv !== f.fv);
+  }
+  for (const id of lb.watchlist) {
+    const f = byTmdb.get(id);
+    if (!f || state.watched.has(f.fv) || onList(f.fv) || lbSync.dismissed.includes(f.fv)) continue;
+    state.watchlist.push({ fv: f.fv, addedAt: new Date().toISOString(), film: f });
+    if (!lbSync.imported.includes(f.fv)) lbSync.imported.push(f.fv);
+  }
+  // Taken off the Letterboxd watchlist since it was imported: take it off here too.
+  for (const fv of [...lbSync.imported]) {
+    const f = filmFor(fv);
+    if (f?.tmdb && onLbList.has(f.tmdb)) continue;
+    state.watchlist = state.watchlist.filter(i => i.fv !== fv);
+    lbSync.imported = lbSync.imported.filter(x => x !== fv);
+  }
+  saveLbSync();
+  saveWatchlist();
+  try { localStorage.setItem(WATCHED_KEY, JSON.stringify([...state.watched])); } catch {}
+  state.letterboxd = lb;
+  updateCount();
+}
+
 function updateWatchedButton(b) {
   const seen = state.watched.has(+b.dataset.watched);
   b.setAttribute('aria-pressed', seen);
@@ -175,7 +224,8 @@ function renderWatchlist() {
   // Films you can already see go first: they're the ones to plan for now.
   if (past.length) parts.unshift(section('Already in cinemas', '', past.sort((a, b) => b.nl.localeCompare(a.nl))));
   const n = state.watchlist.length;
-  $('main').innerHTML = `<div class="wl"><div class="wl-head"><h2>Watchlist</h2><p>${n} film${n === 1 ? '' : 's'} by the week they open in Dutch cinemas</p></div>${parts.join('')}</div>`;
+  const lbNote = state.letterboxd ? ` · synced with Letterboxd (${esc(state.letterboxd.user)})` : '';
+  $('main').innerHTML = `<div class="wl"><div class="wl-head"><h2>Watchlist</h2><p>${n} film${n === 1 ? '' : 's'} by the week they open in Dutch cinemas${lbNote}</p></div>${parts.join('')}</div>`;
   hydrateButtons($('main'));
 }
 
@@ -534,7 +584,9 @@ async function load() {
 
 updateCount();
 render();
-load().then(() => { render(); setStatus(); })
+load()
+  .then(() => fetch('data/letterboxd.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(lb => lb && applyLetterboxd(lb)).catch(() => {}))
+  .then(() => { render(); setStatus(); })
   .catch(err => {
     $('status').textContent = location.protocol === 'file:'
       ? 'This page was opened as a file, so it can’t load release dates. Run "node serve.js" and open http://localhost:4173 instead.'
